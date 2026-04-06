@@ -106,9 +106,9 @@ class SetupChoice:
 
 @dataclass(frozen=True)
 class GUISettings:
-    window_size: Tuple[int, int] = (1020, 1060)
-    tile_size: int = 110
-    board_top: int = 126
+    window_size: Tuple[int, int] = (980, 920)
+    tile_size: int = 94
+    board_top: int = 112
     animation_ms: int = 200
     background_top: Tuple[int, int, int] = (255, 247, 232)
     background_bottom: Tuple[int, int, int] = (255, 236, 205)
@@ -165,6 +165,7 @@ class MagnetKnightsGUI:
         self.celebrated_winner: Optional[str] = None
         self.buttons: list[UIButton] = []
         self.setup_choices: list[SetupChoice] = []
+        self.setup_option_buttons: list[UIButton] = []
         self.setup_start_button: Optional[UIButton] = None
         self.white_gap = 2
         self.black_gap = 2
@@ -181,8 +182,8 @@ class MagnetKnightsGUI:
         self.board_left = (self.window_size[0] - self.board_width) // 2
         self.board_top = self.settings.board_top
         self.board_rect = pygame.Rect(self.board_left, self.board_top, self.board_width, self.board_height)
-        self.status_rect = pygame.Rect(60, 42, self.window_size[0] - 120, 64)
-        self.footer_rect = pygame.Rect(84, self.board_rect.bottom + 34, self.window_size[0] - 168, 154)
+        self.status_rect = pygame.Rect(56, 34, self.window_size[0] - 112, 60)
+        self.footer_rect = pygame.Rect(72, self.board_rect.bottom + 22, self.window_size[0] - 144, 124)
 
         self.title_font = font("Avenir Next", 38, bold=True)
         self.body_font = font("Avenir Next", 20)
@@ -491,26 +492,17 @@ class MagnetKnightsGUI:
             self.enter_setup_mode()
 
     def build_buttons(self) -> list[UIButton]:
-        mode_label = "Mode: AI" if self.play_mode == PLAY_MODE_AI else "Mode: 2P"
-        swap_label = "Swap Side (S)"
-        if self.play_mode == PLAY_MODE_AI:
-            swap_label = "Computer: Black (S)" if self.agent_side == BLACK else "Computer: White (S)"
-
         items = [
             ("restart", "Rematch (R)" if self.current_winner() is not None else "Restart (R)", True),
             ("opening", "Opening Layout (O)", True),
-            ("mode", f"{mode_label} (M)", True),
-            ("variant", f"Variant: {'Respawn' if self.variant == VARIANT_RESPAWN else 'Standard'} (V)", True),
-            ("difficulty", f"AI: {self.difficulty.capitalize()} (D)", self.play_mode == PLAY_MODE_AI),
-            ("swap", swap_label, self.play_mode == PLAY_MODE_AI),
         ]
 
         buttons: list[UIButton] = []
         x = self.footer_rect.x + 22
-        y = self.footer_rect.y + 100
-        gap = 14
+        y = self.footer_rect.y + 76
+        gap = 12
         for key, label, enabled in items:
-            width = max(126, self.button_font.size(label)[0] + 28)
+            width = max(118, self.button_font.size(label)[0] + 24)
             rect = pygame.Rect(x, y, width, 38)
             buttons.append(UIButton(key=key, label=label, rect=rect, enabled=enabled))
             x += width + gap
@@ -524,15 +516,6 @@ class MagnetKnightsGUI:
                 self.reset_game()
             elif button.key == "opening":
                 self.enter_setup_mode()
-            elif button.key == "mode":
-                self.toggle_mode()
-            elif button.key == "variant":
-                self.variant = VARIANT_RESPAWN if self.variant == VARIANT_STANDARD else VARIANT_STANDARD
-                self.enter_setup_mode()
-            elif button.key == "difficulty":
-                self.cycle_difficulty()
-            elif button.key == "swap":
-                self.swap_agent_side()
             return True
         return False
 
@@ -615,16 +598,16 @@ class MagnetKnightsGUI:
             self.screen.blit(label, label.get_rect(center=button.rect.center))
 
     def setup_panel_rect(self) -> pygame.Rect:
-        return pygame.Rect(self.board_left - 30, self.board_top + 116, self.board_width + 60, 332)
+        return pygame.Rect(self.board_left - 30, self.board_top + 84, self.board_width + 60, 390)
 
-    def build_setup_widgets(self) -> tuple[list[SetupChoice], UIButton]:
+    def build_setup_widgets(self) -> tuple[list[SetupChoice], list[UIButton], UIButton]:
         panel = self.setup_panel_rect()
         card_width = 96
         card_height = 84
         gap = 12
         total_width = card_width * COLS + gap * (COLS - 1)
         start_x = panel.centerx - total_width // 2
-        card_y = panel.y + 146
+        card_y = panel.y + 202
 
         choices: list[SetupChoice] = []
         visible_side = self.setup_visible_side()
@@ -633,12 +616,54 @@ class MagnetKnightsGUI:
                 x = start_x + col * (card_width + gap)
                 choices.append(SetupChoice(side=visible_side, gap_col=col, rect=pygame.Rect(x, card_y, card_width, card_height)))
 
+        option_buttons: list[UIButton] = []
+        option_buttons.extend(
+            [
+                UIButton("setup_mode_ai", "Human vs AI", pygame.Rect(panel.x + 28, panel.y + 92, 146, 34), True),
+                UIButton("setup_mode_hotseat", "Hotseat", pygame.Rect(panel.x + 184, panel.y + 92, 104, 34), True),
+                UIButton(
+                    "setup_difficulty",
+                    f"AI: {self.difficulty.capitalize()}" if self.play_mode == PLAY_MODE_AI else "AI only",
+                    pygame.Rect(panel.x + 308, panel.y + 92, 134, 34),
+                    self.play_mode == PLAY_MODE_AI,
+                ),
+                UIButton(
+                    "setup_side",
+                    (
+                        "You: White"
+                        if self.human_side() == WHITE
+                        else "You: Black"
+                        if self.play_mode == PLAY_MODE_AI
+                        else "AI side"
+                    ),
+                    pygame.Rect(panel.x + 454, panel.y + 92, 126, 34),
+                    self.play_mode == PLAY_MODE_AI,
+                ),
+            ]
+        )
+
         start_rect = pygame.Rect(panel.centerx - 92, panel.bottom - 58, 184, 38)
-        return choices, UIButton(key="start_match", label=self.setup_button_label(), rect=start_rect, enabled=True)
+        return choices, option_buttons, UIButton(key="start_match", label=self.setup_button_label(), rect=start_rect, enabled=True)
 
     def handle_setup_click(self, point: Tuple[int, int]) -> bool:
-        self.setup_choices, start_button = self.build_setup_widgets()
+        self.setup_choices, option_buttons, start_button = self.build_setup_widgets()
+        self.setup_option_buttons = option_buttons
         self.setup_start_button = start_button
+
+        for button in self.setup_option_buttons:
+            if not button.enabled or not button.rect.collidepoint(point):
+                continue
+            if button.key == "setup_mode_ai":
+                self.play_mode = PLAY_MODE_AI
+                self.enter_setup_mode()
+            elif button.key == "setup_mode_hotseat":
+                self.play_mode = PLAY_MODE_HOTSEAT
+                self.enter_setup_mode()
+            elif button.key == "setup_difficulty":
+                self.cycle_difficulty()
+            elif button.key == "setup_side":
+                self.swap_agent_side()
+            return True
 
         if self.setup_start_button.rect.collidepoint(point):
             self.advance_setup()
@@ -657,6 +682,18 @@ class MagnetKnightsGUI:
             self.refresh_status()
             return True
         return False
+
+    def draw_setup_option_button(self, button: UIButton, active: bool = False) -> None:
+        fill = self.settings.button_fill_active if active and button.enabled else self.settings.button_fill
+        border = self.settings.move_hint if active and button.enabled else self.settings.button_border
+        if not button.enabled:
+            fill = self.settings.button_disabled
+            border = self.colors["panel_border"]
+        pygame.draw.rect(self.screen, fill, button.rect, border_radius=14)
+        pygame.draw.rect(self.screen, border, button.rect, 2, border_radius=14)
+        text_color = self.settings.button_text if button.enabled else self.colors["muted"]
+        label = self.small_font.render(button.label, True, text_color)
+        self.screen.blit(label, label.get_rect(center=button.rect.center))
 
     def draw_setup_choice(self, choice: SetupChoice) -> None:
         selected_gap = self.white_gap if choice.side == WHITE else self.black_gap
@@ -709,16 +746,35 @@ class MagnetKnightsGUI:
 
         panel = self.setup_panel_rect()
         self.draw_panel(panel)
-        self.setup_choices, self.setup_start_button = self.build_setup_widgets()
+        self.setup_choices, self.setup_option_buttons, self.setup_start_button = self.build_setup_widgets()
 
         title = self.title_font.render("Choose Opening Layout", True, self.colors["panel_text"])
         subtitle = self.body_font.render(
-            "Opening choices stay hidden until the match begins.",
+            "Set the game first, then choose hidden opening layouts.",
             True,
             self.colors["muted"],
         )
         self.screen.blit(title, (panel.x + 26, panel.y + 20))
         self.screen.blit(subtitle, (panel.x + 26, panel.y + 62))
+
+        settings_label = self.small_font.render(
+            "Pregame settings",
+            True,
+            self.colors["muted"],
+        )
+        self.screen.blit(settings_label, (panel.x + 28, panel.y + 72))
+
+        for button in self.setup_option_buttons:
+            is_active = False
+            if button.key == "setup_mode_ai":
+                is_active = self.play_mode == PLAY_MODE_AI
+            elif button.key == "setup_mode_hotseat":
+                is_active = self.play_mode == PLAY_MODE_HOTSEAT
+            elif button.key == "setup_difficulty":
+                is_active = button.enabled
+            elif button.key == "setup_side":
+                is_active = button.enabled
+            self.draw_setup_option_button(button, active=is_active)
 
         if self.setup_stage == "white_pick":
             stage_text = f"White chooses now. Current gap: column {self.white_gap + 1}."
@@ -732,7 +788,7 @@ class MagnetKnightsGUI:
             stage_text = f"Choose your gap as Black. Current gap: column {self.black_gap + 1}."
 
         stage_label = self.body_font.render(stage_text, True, self.colors["panel_text"])
-        self.screen.blit(stage_label, (panel.x + 26, panel.y + 106))
+        self.screen.blit(stage_label, (panel.x + 26, panel.y + 152))
 
         help_text = self.small_font.render(
             "Each card shows which column starts empty. Only the current side's choices are shown.",
@@ -977,33 +1033,32 @@ class MagnetKnightsGUI:
     def draw_overlay_text(self) -> None:
         self.draw_panel(self.status_rect)
         title = self.title_font.render("Magnet Knights", True, self.colors["panel_text"])
-        self.screen.blit(title, (self.status_rect.x + 24, self.status_rect.y + 10))
+        self.screen.blit(title, (self.status_rect.x + 22, self.status_rect.y + 8))
 
         mode_label = "Mode: Human vs AI" if self.play_mode == PLAY_MODE_AI else "Mode: Hotseat"
-        depth_label = self.depth if self.depth is not None else AI_PROFILES[self.difficulty].depth
+        ai_label = f"AI: {self.difficulty.capitalize()}" if self.play_mode == PLAY_MODE_AI else "2 players"
         meta = (
-            f"{mode_label}   |   Difficulty: {self.difficulty.capitalize()} "
-            f"(depth {depth_label})   |   Variant: {'Respawn' if self.variant == VARIANT_RESPAWN else 'Standard'}   |   Turn: {side_name(self.state.side_to_move)}   |   "
+            f"{mode_label}   |   {ai_label}   |   Turn: {side_name(self.state.side_to_move)}   |   "
             f"White home: {self.state.white_knights_home}   |   Black home: {self.state.black_knights_home}"
         )
         meta_text = self.small_font.render(meta, True, self.colors["muted"])
-        self.screen.blit(meta_text, (self.status_rect.x + 330, self.status_rect.y + 18))
+        self.screen.blit(meta_text, (self.status_rect.x + 292, self.status_rect.y + 18))
 
         self.draw_panel(self.footer_rect)
         message = self.body_font.render(self.status_message, True, self.colors["panel_text"])
-        self.screen.blit(message, (self.footer_rect.x + 24, self.footer_rect.y + 22))
+        self.screen.blit(message, (self.footer_rect.x + 24, self.footer_rect.y + 18))
 
         if self.setup_mode:
             controls_primary = "Setup is hidden. Only the current side chooses its opening gap at a time."
-            controls_secondary = "Click a card, then use the panel button to continue. Esc quits."
+            controls_secondary = "Mode, AI difficulty, and side are set here before the match starts. Esc quits."
         else:
             controls_primary = "Mouse: click a seam piece, then click one of the glowing legal destinations."
-            controls_secondary = "Buttons show their shortcuts and current state. Keys: R restart, O opening, M mode, V variant, D AI, S side, Esc quit."
+            controls_secondary = "In-game controls are limited to restart, opening layout, and Esc to quit."
 
         controls_text = self.small_font.render(controls_primary, True, self.colors["muted"])
-        self.screen.blit(controls_text, (self.footer_rect.x + 24, self.footer_rect.y + 66))
+        self.screen.blit(controls_text, (self.footer_rect.x + 24, self.footer_rect.y + 46))
         controls_text_2 = self.small_font.render(controls_secondary, True, self.colors["muted"])
-        self.screen.blit(controls_text_2, (self.footer_rect.x + 24, self.footer_rect.y + 86))
+        self.screen.blit(controls_text_2, (self.footer_rect.x + 24, self.footer_rect.y + 64))
 
         if self.last_move is not None and not self.setup_mode:
             last_move_text = self.small_font.render(
@@ -1011,7 +1066,7 @@ class MagnetKnightsGUI:
                 True,
                 self.colors["muted"],
             )
-            self.screen.blit(last_move_text, (self.footer_rect.right - 220, self.footer_rect.y + 22))
+            self.screen.blit(last_move_text, (self.footer_rect.right - 212, self.footer_rect.y + 18))
 
         self.draw_buttons()
 
@@ -1075,15 +1130,6 @@ class MagnetKnightsGUI:
                         self.enter_setup_mode()
                     elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER) and self.setup_mode:
                         self.advance_setup()
-                    elif event.key == pygame.K_m:
-                        self.toggle_mode()
-                    elif event.key == pygame.K_v:
-                        self.variant = VARIANT_RESPAWN if self.variant == VARIANT_STANDARD else VARIANT_STANDARD
-                        self.enter_setup_mode()
-                    elif event.key == pygame.K_d:
-                        self.cycle_difficulty()
-                    elif event.key == pygame.K_s:
-                        self.swap_agent_side()
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     self.handle_click(event.pos)
 
