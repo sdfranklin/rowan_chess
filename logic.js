@@ -244,6 +244,74 @@ export function legalKnightMoves(state, start) {
   return legalKnightDestinations(state, start).map((to) => ({ from: [...start], to }));
 }
 
+function reconstructKnightPath(state, move) {
+  const [[fromRow, fromCol], [toRow, toCol]] = [move.from, move.to];
+  const piece = state.board[fromRow][fromCol];
+  if (!piece || piece.kind !== KNIGHT) {
+    return null;
+  }
+
+  const side = piece.side;
+  const enemy = enemyOf(side);
+  const dRow = forwardDir(side);
+  const targetKey = `${toRow},${toCol}`;
+
+  function buildPath(board, row, col, path) {
+    if (`${row},${col}` === targetKey && path.length > 0) {
+      return path;
+    }
+
+    const middleRow = row + dRow;
+    const landingRow = row + 2 * dRow;
+    if (!inBounds(middleRow, col) || !inBounds(landingRow, col)) {
+      return null;
+    }
+
+    const middle = board[middleRow][col];
+    const landing = board[landingRow][col];
+    if (!middle || middle.kind !== PAWN || (landing && landing.kind === KNIGHT) || (landing && landing.side === side)) {
+      return null;
+    }
+
+    const nextBoard = board.map((boardRow) => boardRow.map(clonePiece));
+    const knight = nextBoard[row][col];
+    nextBoard[row][col] = null;
+    if (landing && landing.side === enemy && landing.kind === PAWN) {
+      nextBoard[landingRow][col] = null;
+    }
+    nextBoard[landingRow][col] = knight;
+
+    const childPath = buildPath(nextBoard, landingRow, col, [...path, [landingRow, col]]);
+    if (childPath) {
+      return childPath;
+    }
+    if (`${landingRow},${col}` === targetKey) {
+      return [...path, [landingRow, col]];
+    }
+    return null;
+  }
+
+  return buildPath(state.board, fromRow, fromCol, []);
+}
+
+function knightMoveReachesHome(state, move) {
+  const piece = state.board[move.from[0]][move.from[1]];
+  if (!piece || piece.kind !== KNIGHT) {
+    return false;
+  }
+
+  const homeRow = targetRow(piece.side);
+  const path = reconstructKnightPath(state, move);
+  if (!path) {
+    return false;
+  }
+
+  if (piece.side === WHITE) {
+    return path.some(([row]) => row >= homeRow);
+  }
+  return path.some(([row]) => row <= homeRow);
+}
+
 export function getLegalMoves(state) {
   const moves = [];
   for (let row = 0; row < ROWS; row += 1) {
@@ -278,39 +346,8 @@ export function applyMove(state, move) {
     nextState.board[fromRow][fromCol] = null;
     nextState.board[toRow][toCol] = createPiece(piece.side, piece.kind);
   } else {
-    const side = piece.side;
-    const enemy = enemyOf(side);
-    const dRow = forwardDir(side);
-    const targetKey = `${toRow},${toCol}`;
-
-    function buildPath(board, row, col, path) {
-      if (`${row},${col}` === targetKey && path.length > 0) {
-        return path;
-      }
-
-      const middleRow = row + dRow;
-      const landingRow = row + 2 * dRow;
-      if (!inBounds(middleRow, col) || !inBounds(landingRow, col)) {
-        return null;
-      }
-
-      const middle = board[middleRow][col];
-      const landing = board[landingRow][col];
-      if (!middle || middle.kind !== PAWN || (landing && landing.kind === KNIGHT) || (landing && landing.side === side)) {
-        return null;
-      }
-
-      const nextBoard = board.map((boardRow) => boardRow.map(clonePiece));
-      const knight = nextBoard[row][col];
-      nextBoard[row][col] = null;
-      if (landing && landing.side === enemy && landing.kind === PAWN) {
-        nextBoard[landingRow][col] = null;
-      }
-      nextBoard[landingRow][col] = knight;
-      return buildPath(nextBoard, landingRow, col, [...path, [landingRow, col]]);
-    }
-
-    const path = buildPath(nextState.board, fromRow, fromCol, []);
+    const enemy = enemyOf(piece.side);
+    const path = reconstructKnightPath(nextState, move);
     if (!path) {
       throw new Error(`Could not reconstruct knight path for ${moveKey(move)}`);
     }
@@ -330,10 +367,10 @@ export function applyMove(state, move) {
   }
 
   if (piece.kind === KNIGHT) {
-    if (piece.side === WHITE && fromRow !== targetRow(WHITE) && toRow === targetRow(WHITE)) {
+    if (piece.side === WHITE && fromRow < targetRow(WHITE) && knightMoveReachesHome(state, move)) {
       nextState.whiteKnightsHome += 1;
     }
-    if (piece.side === BLACK && fromRow !== targetRow(BLACK) && toRow === targetRow(BLACK)) {
+    if (piece.side === BLACK && fromRow > targetRow(BLACK) && knightMoveReachesHome(state, move)) {
       nextState.blackKnightsHome += 1;
     }
   }
@@ -345,7 +382,7 @@ export function applyMove(state, move) {
 function immediateScoringMoves(state) {
   return getLegalMoves(state).filter((move) => {
     const piece = state.board[move.from[0]][move.from[1]];
-    return piece && piece.kind === KNIGHT && move.to[0] === targetRow(piece.side);
+    return piece && piece.kind === KNIGHT && knightMoveReachesHome(state, move);
   });
 }
 
@@ -437,7 +474,7 @@ function movePriority(state, move) {
   const piece = state.board[move.from[0]][move.from[1]];
   const target = state.board[move.to[0]][move.to[1]];
   let priority = 0;
-  if (piece && piece.kind === KNIGHT && move.to[0] === targetRow(piece.side)) {
+  if (piece && piece.kind === KNIGHT && knightMoveReachesHome(state, move)) {
     priority += 1000;
   }
   if (piece && piece.kind === KNIGHT) {
