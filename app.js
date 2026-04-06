@@ -21,6 +21,8 @@ import {
 
 const PLAY_MODE_AI = "ai";
 const PLAY_MODE_HOTSEAT = "hotseat";
+const LOGICAL_CANVAS_WIDTH = 860;
+const LOGICAL_CANVAS_HEIGHT = 900;
 
 const canvas = document.getElementById("board");
 const ctx = canvas.getContext("2d");
@@ -49,10 +51,10 @@ const settings = {
   boardLeft: 155,
   boardTop: 116,
   animationMs: 200,
-  checkerRed: "#f36457",
-  checkerYellow: "#ffd14d",
-  seam: "#fff9e7",
-  seamDark: "#cd8d54",
+  checkerRed: "#ef8e84",
+  checkerYellow: "#f5d773",
+  seam: "#fff6ea",
+  seamDark: "#d5b08a",
   panelText: "#58301d",
   muted: "#8c624a",
   whitePawn: "#e34436",
@@ -62,7 +64,7 @@ const settings = {
   selection: "#faf69e",
   moveHint: "#55e8c6",
   lastMove: "rgba(255,255,255,0.78)",
-  boardShadow: "rgba(164,121,74,0.35)",
+  boardShadow: "rgba(164,121,74,0.2)",
   backgroundTop: "#fff7e8",
   backgroundBottom: "#ffecce",
   overlay: "rgba(80, 35, 18, 0.74)",
@@ -90,6 +92,14 @@ function humanSide() {
     return null;
   }
   return app.agentSide === BLACK ? WHITE : BLACK;
+}
+
+function resizeCanvas() {
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = Math.round(LOGICAL_CANVAS_WIDTH * dpr);
+  canvas.height = Math.round(LOGICAL_CANVAS_HEIGHT * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
 }
 
 function clamp(value, lower, upper) {
@@ -311,7 +321,7 @@ function updateConfetti(dt) {
     particle.y += particle.vy;
     particle.vy += 0.15;
     particle.ttl -= dt;
-    return particle.ttl > 0 && particle.y < canvas.height + 30;
+    return particle.ttl > 0 && particle.y < LOGICAL_CANVAS_HEIGHT + 30;
   });
 }
 
@@ -462,7 +472,7 @@ function buildChoicePreview(side, gapCol) {
   return preview;
 }
 
-function drawRoundedRect(x, y, width, height, radius, fill, stroke = null, lineWidth = 1) {
+function roundedRectPath(x, y, width, height, radius) {
   ctx.beginPath();
   ctx.moveTo(x + radius, y);
   ctx.arcTo(x + width, y, x + width, y + height, radius);
@@ -470,6 +480,10 @@ function drawRoundedRect(x, y, width, height, radius, fill, stroke = null, lineW
   ctx.arcTo(x, y + height, x, y, radius);
   ctx.arcTo(x, y, x + width, y, radius);
   ctx.closePath();
+}
+
+function drawRoundedRect(x, y, width, height, radius, fill, stroke = null, lineWidth = 1) {
+  roundedRectPath(x, y, width, height, radius);
   if (fill) {
     ctx.fillStyle = fill;
     ctx.fill();
@@ -482,19 +496,35 @@ function drawRoundedRect(x, y, width, height, radius, fill, stroke = null, lineW
 }
 
 function drawBoardBackground() {
-  const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  const gradient = ctx.createLinearGradient(0, 0, 0, LOGICAL_CANVAS_HEIGHT);
   gradient.addColorStop(0, settings.backgroundTop);
   gradient.addColorStop(1, settings.backgroundBottom);
   ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, LOGICAL_CANVAS_WIDTH, LOGICAL_CANVAS_HEIGHT);
 
   ctx.save();
   ctx.shadowColor = settings.boardShadow;
-  ctx.shadowBlur = 30;
-  ctx.shadowOffsetY = 14;
-  drawRoundedRect(settings.boardLeft - 18, settings.boardTop - 18, settings.tileSize * COLS + 36, settings.tileSize * (ROWS - 1) + 36, 36, "#f8fdfe");
+  ctx.shadowBlur = 26;
+  ctx.shadowOffsetY = 12;
+  drawRoundedRect(
+    settings.boardLeft - 18,
+    settings.boardTop - 18,
+    settings.tileSize * COLS + 36,
+    settings.tileSize * (ROWS - 1) + 36,
+    36,
+    "rgba(249, 252, 251, 0.98)",
+  );
   ctx.restore();
-  drawRoundedRect(settings.boardLeft - 18, settings.boardTop - 18, settings.tileSize * COLS + 36, settings.tileSize * (ROWS - 1) + 36, 36, "#f8fdfe", "#ebc291", 2);
+  drawRoundedRect(
+    settings.boardLeft - 18,
+    settings.boardTop - 18,
+    settings.tileSize * COLS + 36,
+    settings.tileSize * (ROWS - 1) + 36,
+    36,
+    "rgba(249, 252, 251, 0.98)",
+    "rgba(229, 200, 166, 0.9)",
+    1.5,
+  );
 
   for (let row = 0; row < ROWS - 1; row += 1) {
     for (let col = 0; col < COLS; col += 1) {
@@ -502,28 +532,29 @@ function drawBoardBackground() {
       const y = settings.boardTop + row * settings.tileSize + 8;
       const size = settings.tileSize - 16;
       const color = (row + col) % 2 === 0 ? settings.checkerRed : settings.checkerYellow;
+      const tileGradient = ctx.createLinearGradient(x, y, x + size, y + size);
+      tileGradient.addColorStop(0, mixHex(color, "#ffffff", 0.24));
+      tileGradient.addColorStop(1, mixHex(color, "#f6efe7", 0.12));
 
       ctx.save();
-      ctx.shadowColor = "rgba(164,121,74,0.18)";
-      ctx.shadowBlur = 14;
+      ctx.shadowColor = "rgba(164,121,74,0.12)";
+      ctx.shadowBlur = 12;
       ctx.shadowOffsetY = 5;
-      drawRoundedRect(x, y, size, size, 22, color);
+      roundedRectPath(x, y, size, size, 22);
+      ctx.fillStyle = tileGradient;
+      ctx.fill();
       ctx.restore();
 
-      ctx.globalAlpha = 0.72;
-      drawRoundedRect(x, y, size, size, 22, color, "rgba(255,255,255,0.92)", 2);
-      ctx.globalAlpha = 0.28;
-      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, "white");
-      ctx.globalAlpha = 0.18;
-      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, "white", 2);
-      ctx.globalAlpha = 1;
+      drawRoundedRect(x, y, size, size, 22, "rgba(255,255,255,0.06)", "rgba(255,255,255,0.7)", 1.5);
+      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, "rgba(255,255,255,0.22)");
+      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, "rgba(255,255,255,0.18)", 1.5);
     }
   }
 
   for (let seamIndex = 0; seamIndex < ROWS; seamIndex += 1) {
     const y = settings.boardTop + seamIndex * settings.tileSize;
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255, 250, 241, 0.92)";
+    ctx.lineWidth = 3.5;
     ctx.beginPath();
     ctx.moveTo(settings.boardLeft + 8, y);
     ctx.lineTo(settings.boardLeft + settings.tileSize * COLS - 8, y);
@@ -531,8 +562,8 @@ function drawBoardBackground() {
   }
   for (let seamIndex = 1; seamIndex < COLS; seamIndex += 1) {
     const x = settings.boardLeft + seamIndex * settings.tileSize;
-    ctx.strokeStyle = "rgba(205, 141, 84, 0.78)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(213, 176, 138, 0.72)";
+    ctx.lineWidth = 2.5;
     ctx.beginPath();
     ctx.moveTo(x, settings.boardTop + 8);
     ctx.lineTo(x, settings.boardTop + settings.tileSize * (ROWS - 1) - 8);
@@ -546,12 +577,12 @@ function drawBoardBackground() {
 function drawTargetGlow(side) {
   const seamRow = targetRow(side);
   const { y } = positionToPixel([seamRow, 0]);
-  const glow = ctx.createRadialGradient(canvas.width / 2, y, 10, canvas.width / 2, y, settings.tileSize * 2.7);
+  const glow = ctx.createRadialGradient(LOGICAL_CANVAS_WIDTH / 2, y, 10, LOGICAL_CANVAS_WIDTH / 2, y, settings.tileSize * 2.7);
   glow.addColorStop(0, `${side === WHITE ? "rgba(227, 68, 54, 0.34)" : "rgba(248, 210, 55, 0.34)"}`);
   glow.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = glow;
   ctx.beginPath();
-  ctx.ellipse(canvas.width / 2, y, settings.tileSize * 2.9, 24, 0, 0, Math.PI * 2);
+  ctx.ellipse(LOGICAL_CANVAS_WIDTH / 2, y, settings.tileSize * 2.9, 24, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.strokeStyle = side === WHITE ? "rgba(227, 68, 54, 0.72)" : "rgba(248, 210, 55, 0.72)";
@@ -566,12 +597,12 @@ function drawEdgePositions() {
   for (let row = 0; row < ROWS; row += 1) {
     for (let col = 0; col < COLS; col += 1) {
       const { x, y } = positionToPixel([row, col]);
-      ctx.fillStyle = "#eef7fc";
+      ctx.fillStyle = "rgba(243, 248, 250, 0.96)";
       ctx.beginPath();
       ctx.arc(x, y, 10, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(205, 141, 84, 0.92)";
-      ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(213, 176, 138, 0.85)";
+      ctx.lineWidth = 1.5;
       ctx.stroke();
     }
   }
@@ -621,8 +652,7 @@ function drawMoveMarker(x, y) {
 
 function drawTrianglePiece(piece, x, y, selected = false) {
   const baseColor = colorForPiece(piece);
-  const outline = "#253640";
-  const light = mixHex(baseColor, "#ffffff", 0.38);
+  const outline = mixHex(baseColor, "#6c5547", 0.18);
   const isPawn = piece.kind === PAWN;
   const width = isPawn ? 48 : 62;
   const height = isPawn ? 34 : 74;
@@ -656,13 +686,13 @@ function drawTrianglePiece(piece, x, y, selected = false) {
 
   ctx.save();
   if (selected) {
-    ctx.fillStyle = "rgba(250, 246, 158, 0.56)";
+    ctx.fillStyle = "rgba(250, 246, 158, 0.42)";
     ctx.beginPath();
     ctx.arc(x, y, 34, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  ctx.fillStyle = "rgba(164,121,74,0.28)";
+  ctx.fillStyle = "rgba(164,121,74,0.18)";
   ctx.beginPath();
   points.forEach(([px, py], index) => {
     const sx = px + 3;
@@ -676,7 +706,13 @@ function drawTrianglePiece(piece, x, y, selected = false) {
   ctx.closePath();
   ctx.fill();
 
-  ctx.fillStyle = baseColor;
+  const topY = Math.min(...points.map(([, py]) => py));
+  const bottomY = Math.max(...points.map(([, py]) => py));
+  const pieceGradient = ctx.createLinearGradient(x, topY, x, bottomY);
+  pieceGradient.addColorStop(0, mixHex(baseColor, "#ffffff", 0.18));
+  pieceGradient.addColorStop(0.45, baseColor);
+  pieceGradient.addColorStop(1, mixHex(baseColor, "#684d40", 0.08));
+
   ctx.beginPath();
   points.forEach(([px, py], index) => {
     if (index === 0) {
@@ -686,13 +722,17 @@ function drawTrianglePiece(piece, x, y, selected = false) {
     }
   });
   ctx.closePath();
+  ctx.fillStyle = pieceGradient;
   ctx.fill();
 
   ctx.strokeStyle = outline;
-  ctx.lineWidth = 3;
+  ctx.lineWidth = 1.75;
   ctx.stroke();
 
-  ctx.fillStyle = light;
+  const shineGradient = ctx.createLinearGradient(x, topY, x, bottomY);
+  shineGradient.addColorStop(0, "rgba(255,255,255,0.72)");
+  shineGradient.addColorStop(1, "rgba(255,255,255,0.08)");
+  ctx.fillStyle = shineGradient;
   ctx.beginPath();
   shine.forEach(([px, py], index) => {
     if (index === 0) {
@@ -768,8 +808,8 @@ function onCanvasClick(event) {
     return;
   }
   const rect = canvas.getBoundingClientRect();
-  const scaleX = canvas.width / rect.width;
-  const scaleY = canvas.height / rect.height;
+  const scaleX = LOGICAL_CANVAS_WIDTH / rect.width;
+  const scaleY = LOGICAL_CANVAS_HEIGHT / rect.height;
   const x = (event.clientX - rect.left) * scaleX;
   const y = (event.clientY - rect.top) * scaleY;
   const clicked = pointToCoord(x, y);
@@ -826,6 +866,7 @@ swapButton.addEventListener("click", swapAgentSide);
 setupButton.addEventListener("click", advanceSetup);
 rematchOverlayButton.addEventListener("click", () => resetGame());
 canvas.addEventListener("click", onCanvasClick);
+window.addEventListener("resize", resizeCanvas);
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "r" || event.key === "R") {
@@ -843,6 +884,7 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
+resizeCanvas();
 enterSetupMode();
 refreshUi();
 requestAnimationFrame(tick);

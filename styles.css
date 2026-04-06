@@ -2,19 +2,19 @@
   --bg-top: #fff7e8;
   --bg-bottom: #ffecce;
   --panel: rgba(255, 253, 248, 0.94);
-  --panel-border: #ebc291;
+  --panel-border: #ead1b3;
   --panel-text: #58301d;
   --muted: #8c624a;
-  --button-fill: #fff1d6;
-  --button-fill-active: #ffe2a9;
-  --button-border: #d29a56;
+  --button-fill: #fff6ea;
+  --button-fill-active: #ffefc8;
+  --button-border: #ddbc97;
   --button-text: #66381f;
   --button-disabled: #dfccbe;
-  --checker-red: #f36457;
-  --checker-yellow: #ffd14d;
+  --checker-red: #ef8e84;
+  --checker-yellow: #f5d773;
   --selection: #faf69e;
   --move-hint: #55e8c6;
-  --shadow: rgba(164, 121, 74, 0.22);
+  --shadow: rgba(164, 121, 74, 0.16);
 }
 
 * {
@@ -43,7 +43,7 @@ body {
 
 .panel {
   background: var(--panel);
-  border: 2px solid var(--panel-border);
+  border: 1.5px solid var(--panel-border);
   border-radius: 26px;
   box-shadow: 0 18px 40px var(--shadow);
 }
@@ -127,16 +127,18 @@ h2 {
 
 button {
   appearance: none;
-  border: 2px solid var(--button-border);
-  border-radius: 16px;
-  background: var(--button-fill);
+  border: 1.5px solid var(--button-border);
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0)),
+    var(--button-fill);
   color: var(--button-text);
   padding: 12px 18px;
   font: inherit;
   font-weight: 700;
   cursor: pointer;
   transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease;
-  box-shadow: 0 8px 16px rgba(210, 154, 86, 0.16);
+  box-shadow: 0 8px 16px rgba(210, 154, 86, 0.1);
 }
 
 button:hover:not(:disabled) {
@@ -165,8 +167,8 @@ button:disabled {
   justify-content: center;
   padding: 20px;
   border-radius: 24px;
-  background: rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(3px);
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(5px);
 }
 
 .hidden {
@@ -176,10 +178,10 @@ button:disabled {
 .overlay-card {
   width: min(640px, 100%);
   background: rgba(255, 252, 246, 0.96);
-  border: 2px solid var(--panel-border);
-  border-radius: 24px;
+  border: 1.5px solid var(--panel-border);
+  border-radius: 28px;
   padding: 24px 24px 22px;
-  box-shadow: 0 20px 36px rgba(88, 48, 29, 0.18);
+  box-shadow: 0 20px 36px rgba(88, 48, 29, 0.12);
 }
 
 .overlay-copy {
@@ -202,6 +204,10 @@ button:disabled {
   gap: 12px;
   padding: 14px 10px 12px;
   min-height: 126px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.08)),
+    rgba(255, 247, 233, 0.88);
+  box-shadow: 0 10px 18px rgba(164, 121, 74, 0.08);
 }
 
 .setup-choice.active {
@@ -218,6 +224,10 @@ button:disabled {
   position: relative;
   width: 100%;
   height: 52px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(255, 255, 255, 0.06)),
+    rgba(255, 249, 241, 0.85);
 }
 
 .choice-seam {
@@ -227,7 +237,7 @@ button:disabled {
   top: 28px;
   height: 3px;
   border-radius: 999px;
-  background: rgba(205, 141, 84, 0.78);
+  background: rgba(213, 176, 138, 0.74);
 }
 
 .choice-slot {
@@ -236,8 +246,8 @@ button:disabled {
   width: 10px;
   height: 10px;
   border-radius: 999px;
-  background: rgba(255, 249, 231, 0.96);
-  border: 1px solid rgba(205, 141, 84, 0.9);
+  background: rgba(255, 249, 236, 0.98);
+  border: 1px solid rgba(213, 176, 138, 0.72);
   transform: translateX(-50%);
 }
 
@@ -247,6 +257,7 @@ button:disabled {
   width: 20px;
   height: 20px;
   transform: translateX(-50%);
+  filter: drop-shadow(0 4px 6px rgba(120, 84, 58, 0.18));
 }
 
 .choice-piece.knight.white,
@@ -266,19 +277,19 @@ button:disabled {
 }
 
 .choice-piece.pawn.white {
-  background: #e34436;
+  background: linear-gradient(180deg, #f06f62, #dc4738);
 }
 
 .choice-piece.pawn.black {
-  background: #f8d237;
+  background: linear-gradient(180deg, #fae27d, #e8c82b);
 }
 
 .choice-piece.knight.white {
-  background: #4381ff;
+  background: linear-gradient(180deg, #7aa5ff, #4b80e6);
 }
 
 .choice-piece.knight.black {
-  background: #9558dd;
+  background: linear-gradient(180deg, #b184ee, #8f5ad1);
 }
 
 .win-card {
