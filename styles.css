@@ -36,7 +36,7 @@ body {
 }
 
 .app-shell {
-  max-width: 1080px;
+  max-width: 940px;
   margin: 0 auto;
   padding: 28px 20px 40px;
 }
@@ -96,15 +96,68 @@ h2 {
 }
 
 #board {
-  width: 100%;
+  width: min(100%, 860px);
   height: auto;
   display: block;
+  margin: 0 auto;
   border-radius: 24px;
 }
 
 .footer-panel {
   margin-top: 22px;
   padding: 22px 24px 24px;
+}
+
+.rules-panel {
+  margin-top: 22px;
+  padding: 24px;
+}
+
+.rules-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+  margin-bottom: 20px;
+}
+
+.rules-note {
+  margin: 0;
+  max-width: 28ch;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: right;
+}
+
+.rules-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.rules-card {
+  padding: 18px 18px 16px;
+  border: 1.5px solid rgba(234, 209, 179, 0.92);
+  border-radius: 22px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.08)),
+    rgba(255, 248, 238, 0.84);
+}
+
+.rules-card h3 {
+  margin: 0 0 10px;
+  font-size: 1.02rem;
+}
+
+.rules-card ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.rules-card li + li {
+  margin-top: 0.45rem;
 }
 
 .status-text {
@@ -309,6 +362,13 @@ button:disabled {
     text-align: left;
   }
 
+  .board-panel,
+  .footer-panel,
+  .rules-panel {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
   .overlay {
     inset: 8px;
     padding: 12px;
@@ -322,7 +382,67 @@ button:disabled {
     gap: 10px;
   }
 
+  .rules-header {
+    flex-direction: column;
+  }
+
+  .rules-note {
+    max-width: none;
+    text-align: left;
+  }
+
+  .rules-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .choice-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   button {
     width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .app-shell {
+    padding: 12px 8px 22px;
+  }
+
+  .panel {
+    border-radius: 22px;
+  }
+
+  .top-panel,
+  .footer-panel,
+  .rules-panel {
+    padding: 16px;
+  }
+
+  .board-panel {
+    padding: 8px;
+  }
+
+  #board {
+    width: 100%;
+    border-radius: 18px;
+  }
+
+  .overlay {
+    inset: 4px;
+    padding: 8px;
+  }
+
+  .overlay-card {
+    padding: 16px 14px 18px;
+    border-radius: 22px;
+  }
+
+  .choice-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .status-text {
+    font-size: 1rem;
   }
 }
