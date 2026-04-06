@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Magnet Knights</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="top-panel panel">
+        <div>
+          <p class="eyebrow">Rowan Chess</p>
+          <h1>Magnet Knights</h1>
+        </div>
+        <p class="meta-text" id="meta-text"></p>
+      </header>
+
+      <main class="board-panel panel">
+        <canvas id="board" width="860" height="900" aria-label="Magnet Knights board"></canvas>
+
+        <div class="overlay setup-overlay" id="setup-overlay">
+          <div class="overlay-card">
+            <p class="overlay-eyebrow">Hidden Opening</p>
+            <h2 id="setup-title">Choose Opening Layout</h2>
+            <p class="overlay-copy" id="setup-copy"></p>
+            <div class="choice-grid" id="setup-choices"></div>
+            <button class="primary-button" id="setup-button" type="button">Start Match</button>
+          </div>
+        </div>
+
+        <div class="overlay win-overlay hidden" id="win-overlay">
+          <div class="overlay-card win-card">
+            <p class="overlay-eyebrow">Match Over</p>
+            <h2 id="win-title">White Wins</h2>
+            <p class="overlay-copy" id="win-copy"></p>
+            <button class="primary-button" id="rematch-overlay-button" type="button">Play Again</button>
+          </div>
+        </div>
+      </main>
+
+      <section class="footer-panel panel">
+        <p class="status-text" id="status-text"></p>
+        <p class="help-text" id="help-text"></p>
+        <div class="controls">
+          <button id="restart-button" type="button">Restart</button>
+          <button id="opening-button" type="button">Opening Layout</button>
+          <button id="mode-button" type="button">Mode: AI</button>
+          <button id="difficulty-button" type="button">AI: Medium</button>
+          <button id="swap-button" type="button">Computer: Black</button>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
