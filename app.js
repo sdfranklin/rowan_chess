@@ -4,13 +4,17 @@ import {
   DIFFICULTY_PROFILES,
   KNIGHT,
   PAWN,
+  RESPAWN_ROW_FROM_SIDE,
   ROWS,
+  VARIANT_RESPAWN,
+  VARIANT_STANDARD,
   WHITE,
   agentMove,
   applyMove,
   createInitialState,
   getLegalMoves,
   getLegalMovesFrom,
+  isRespawnMove,
   liveKnights,
   moveToString,
   sideName,
@@ -35,6 +39,8 @@ const setupTitle = document.getElementById("setup-title");
 const setupCopy = document.getElementById("setup-copy");
 const setupChoices = document.getElementById("setup-choices");
 const setupButton = document.getElementById("setup-button");
+const visualChoiceRow = document.getElementById("visual-choice-row");
+const rulesChoiceRow = document.getElementById("rules-choice-row");
 const winOverlay = document.getElementById("win-overlay");
 const winTitle = document.getElementById("win-title");
 const winCopy = document.getElementById("win-copy");
@@ -42,9 +48,12 @@ const rematchOverlayButton = document.getElementById("rematch-overlay-button");
 
 const restartButton = document.getElementById("restart-button");
 const openingButton = document.getElementById("opening-button");
+const respawnButton = document.getElementById("respawn-button");
 const modeButton = document.getElementById("mode-button");
+const variantButton = document.getElementById("variant-button");
 const difficultyButton = document.getElementById("difficulty-button");
 const swapButton = document.getElementById("swap-button");
+const localPreviewMode = visualChoiceRow !== null || rulesChoiceRow !== null;
 
 const settings = {
   tileSize: 110,
@@ -74,11 +83,14 @@ const app = {
   playMode: PLAY_MODE_AI,
   agentSide: BLACK,
   difficulty: "medium",
+  variant: VARIANT_STANDARD,
+  visualStyle: localPreviewMode ? "simplified" : "classic",
   whiteGap: 2,
   blackGap: 2,
   setupMode: true,
   setupStage: "playerWhite",
   selected: null,
+  respawnArmed: false,
   lastMove: null,
   state: null,
   animation: null,
@@ -118,6 +130,9 @@ function mixHex(a, b, amount) {
 }
 
 function colorForPiece(piece) {
+  if (app.visualStyle === "simplified") {
+    return piece.side === WHITE ? "#de7461" : "#527dc0";
+  }
   if (piece.side === WHITE && piece.kind === PAWN) {
     return settings.whitePawn;
   }
@@ -134,6 +149,27 @@ function currentWinner() {
   return winner(app.state);
 }
 
+function respawnMovesByDestination() {
+  const moves = new Map();
+  for (const move of getLegalMoves(app.state)) {
+    if (isRespawnMove(move)) {
+      moves.set(move.to.join(","), move);
+    }
+  }
+  return moves;
+}
+
+function canArmRespawn() {
+  return (
+    !app.setupMode &&
+    !app.animation &&
+    currentWinner() === null &&
+    isHumanTurn() &&
+    app.variant === VARIANT_RESPAWN &&
+    respawnMovesByDestination().size > 0
+  );
+}
+
 function resetGame({ keepMode = true } = {}) {
   if (!keepMode) {
     app.playMode = PLAY_MODE_AI;
@@ -141,8 +177,9 @@ function resetGame({ keepMode = true } = {}) {
   }
   app.setupMode = false;
   app.setupStage = "idle";
-  app.state = createInitialState(app.whiteGap, app.blackGap);
+  app.state = createInitialState(app.whiteGap, app.blackGap, app.variant);
   app.selected = null;
+  app.respawnArmed = false;
   app.lastMove = null;
   app.animation = null;
   app.aiDueAt = 0;
@@ -165,8 +202,9 @@ function enterSetupMode() {
   } else {
     app.setupStage = "whitePick";
   }
-  app.state = createInitialState(app.whiteGap, app.blackGap);
+  app.state = createInitialState(app.whiteGap, app.blackGap, app.variant);
   app.selected = null;
+  app.respawnArmed = false;
   app.lastMove = null;
   app.animation = null;
   app.aiDueAt = 0;
@@ -212,7 +250,7 @@ function positionToPixel([row, col]) {
 
 function pointToCoord(x, y) {
   let bestCoord = null;
-  let bestDistance = settings.tileSize * 0.34;
+  let bestDistance = settings.tileSize * 0.46;
   for (let row = 0; row < ROWS; row += 1) {
     for (let col = 0; col < COLS; col += 1) {
       const point = positionToPixel([row, col]);
@@ -253,9 +291,20 @@ function scheduleAi() {
 }
 
 function startMove(move) {
+  if (isRespawnMove(move)) {
+    app.state = applyMove(app.state, move);
+    app.selected = null;
+    app.respawnArmed = false;
+    app.lastMove = move;
+    app.aiDueAt = 0;
+    refreshUi();
+    scheduleAi();
+    return;
+  }
   const piece = app.state.board[move.from[0]][move.from[1]];
   const nextState = applyMove(app.state, move);
   app.selected = null;
+  app.respawnArmed = false;
   app.aiDueAt = 0;
   app.animation = {
     move,
@@ -333,27 +382,47 @@ function refreshUi() {
 
   const modeLabel = app.playMode === PLAY_MODE_AI ? "Human vs AI" : "Hotseat";
   const depthLabel = DIFFICULTY_PROFILES[app.difficulty].depth;
-  metaText.textContent = `Mode: ${modeLabel} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (depth ${depthLabel}) | Turn: ${sideName(app.state.sideToMove)} | White home: ${app.state.whiteKnightsHome} | Black home: ${app.state.blackKnightsHome}`;
+  const variantLabel = app.variant === VARIANT_RESPAWN ? "Respawn" : "Standard";
+  const rulesMeta = localPreviewMode ? ` | Rules: ${variantLabel}` : "";
+  metaText.textContent = `Mode: ${modeLabel}${rulesMeta} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (depth ${depthLabel}) | Turn: ${sideName(app.state.sideToMove)} | Bottom home: ${app.state.whiteKnightsHome} | Top home: ${app.state.blackKnightsHome}`;
 
   modeButton.textContent = app.playMode === PLAY_MODE_AI ? "Mode: AI" : "Mode: 2P";
+  if (variantButton) {
+    variantButton.textContent = `Rules: ${variantLabel}`;
+  }
+  document.body.dataset.visualStyle = app.visualStyle;
   difficultyButton.textContent = `AI: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)}`;
   difficultyButton.disabled = app.playMode !== PLAY_MODE_AI;
   swapButton.textContent = app.playMode === PLAY_MODE_AI ? `Computer: ${sideName(app.agentSide)}` : "Swap Side";
   swapButton.disabled = app.playMode !== PLAY_MODE_AI;
-  restartButton.textContent = won !== null ? "Rematch" : "Restart";
+  restartButton.textContent = "Restart";
+  if (respawnButton) {
+    const respawnAvailable = canArmRespawn();
+    respawnButton.classList.toggle("hidden", !respawnAvailable && !app.respawnArmed);
+    respawnButton.disabled = !respawnAvailable && !app.respawnArmed;
+    respawnButton.textContent = app.respawnArmed ? "Cancel Respawn" : "Respawn Pawn";
+  }
 
   if (app.setupMode) {
     statusText.textContent = setupStatusText();
-    helpText.textContent = "Setup is hidden. Only the current side chooses its opening gap at a time.";
+    helpText.textContent = localPreviewMode
+      ? "Choose the look and game type first, then each side chooses its opening gap in secret."
+      : "Setup is hidden. Only the current side chooses its opening gap at a time.";
   } else if (won !== null) {
     statusText.textContent = winningReason(app.state, won);
-    helpText.textContent = "Use Restart to play again, or Opening Layout to choose a fresh hidden setup.";
+    helpText.textContent = "Use Restart to begin a fresh hidden setup and choose opening positions again.";
   } else if (app.animation) {
     statusText.textContent = `${sideName(app.animation.piece.side)} piece is gliding along the seam.`;
     helpText.textContent = "Click a seam piece, then a glowing destination. The highlighted seam marks the finish line.";
   } else if (app.playMode === PLAY_MODE_AI && app.state.sideToMove === app.agentSide) {
     statusText.textContent = `${sideName(app.agentSide)} agent is choosing a move.`;
     helpText.textContent = "Click a seam piece, then a glowing destination. Use Opening Layout to reopen hidden setup.";
+  } else if (app.respawnArmed) {
+    statusText.textContent = `${sideName(app.state.sideToMove)} is choosing a respawn spot on row ${RESPAWN_ROW_FROM_SIDE}.`;
+    helpText.textContent = `Click an open glowing seam on row ${RESPAWN_ROW_FROM_SIDE}, or press Cancel Respawn.`;
+  } else if (app.variant === VARIANT_RESPAWN && app.selected === null && respawnMovesByDestination().size > 0) {
+    statusText.textContent = `${sideName(app.state.sideToMove)} may bring back one missing pawn this turn.`;
+    helpText.textContent = `Press Respawn Pawn to choose a spot on row ${RESPAWN_ROW_FROM_SIDE}, or move a piece normally.`;
   } else if (app.selected) {
     const piece = app.state.board[app.selected[0]][app.selected[1]];
     const name = piece.kind === KNIGHT ? "knight" : "pawn";
@@ -380,13 +449,16 @@ function refreshUi() {
 
 function setupStatusText() {
   if (app.setupStage === "whitePick") {
-    return "White: choose your opening gap without showing Black.";
+    return "Bottom: choose your opening gap without showing Top.";
   }
   if (app.setupStage === "passBlack") {
-    return "White is locked in. Pass the device to Black.";
+    return "Bottom is locked in. Pass the device to Top.";
   }
   if (app.setupStage === "blackPick") {
-    return "Black: choose your opening gap without seeing White.";
+    return "Top: choose your opening gap without seeing Bottom.";
+  }
+  if (localPreviewMode) {
+    return `Choose your opening gap. Playing ${app.variant === VARIANT_RESPAWN ? "Respawn" : "Standard"}.`;
   }
   return "Choose your opening gap. The computer's opening stays hidden until the match starts.";
 }
@@ -398,19 +470,28 @@ function renderSetupOverlay() {
   }
   setupOverlay.classList.remove("hidden");
   setupChoices.replaceChildren();
+  if (visualChoiceRow) {
+    visualChoiceRow.replaceChildren();
+  }
+  if (rulesChoiceRow) {
+    rulesChoiceRow.replaceChildren();
+  }
 
   setupTitle.textContent = "Choose Opening Layout";
   if (app.setupStage === "whitePick") {
-    setupCopy.textContent = `White chooses now. Current gap: column ${app.whiteGap + 1}.`;
+    setupCopy.textContent = `Bottom chooses now. Current gap: column ${app.whiteGap + 1}.`;
   } else if (app.setupStage === "passBlack") {
-    setupCopy.textContent = "White is hidden. Hand over to Black, then click Black Turn.";
+    setupCopy.textContent = "Bottom is hidden. Hand over to Top, then click Top Turn.";
   } else if (app.setupStage === "blackPick") {
-    setupCopy.textContent = `Black chooses now. Current gap: column ${app.blackGap + 1}.`;
+    setupCopy.textContent = `Top chooses now. Current gap: column ${app.blackGap + 1}.`;
   } else if (app.setupStage === "playerWhite") {
-    setupCopy.textContent = `Choose your gap as White. The computer's gap is hidden. Current gap: column ${app.whiteGap + 1}.`;
+    setupCopy.textContent = `Choose your gap as Bottom. The computer's gap is hidden. Current gap: column ${app.whiteGap + 1}.`;
   } else {
-    setupCopy.textContent = `Choose your gap as Black. The computer's gap is hidden. Current gap: column ${app.blackGap + 1}.`;
+    setupCopy.textContent = `Choose your gap as Top. The computer's gap is hidden. Current gap: column ${app.blackGap + 1}.`;
   }
+
+  renderVisualChoices();
+  renderRulesChoices();
 
   const visibleSide = setupVisibleSide();
   if (visibleSide) {
@@ -428,7 +509,7 @@ function renderSetupOverlay() {
         } else {
           app.blackGap = col;
         }
-        app.state = createInitialState(app.whiteGap, app.blackGap);
+        app.state = createInitialState(app.whiteGap, app.blackGap, app.variant);
         app.selected = null;
         app.lastMove = null;
         refreshUi();
@@ -442,7 +523,89 @@ function renderSetupOverlay() {
     }
   }
 
-  setupButton.textContent = app.setupStage === "whitePick" ? "Lock White Choice" : app.setupStage === "passBlack" ? "Black Turn" : "Start Match";
+  setupButton.textContent = app.setupStage === "whitePick" ? "Lock Bottom Choice" : app.setupStage === "passBlack" ? "Top Turn" : "Start Match";
+}
+
+function renderVisualChoices() {
+  if (!visualChoiceRow) {
+    return;
+  }
+
+  const options = [
+    {
+      key: "classic",
+      title: "Classic",
+      copy: "Checkerboard tiles and the original four magnetic piece colours.",
+    },
+    {
+      key: "simplified",
+      title: "Simplified",
+      copy: "One colour per team, calmer tiles, and stronger shape contrast between pawns and knights.",
+    },
+  ];
+
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.visualStyle === option.key) {
+      button.classList.add("active");
+    }
+    button.addEventListener("click", () => {
+      app.visualStyle = option.key;
+      refreshUi();
+    });
+
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    visualChoiceRow.append(button);
+  }
+}
+
+function renderRulesChoices() {
+  if (!rulesChoiceRow) {
+    return;
+  }
+
+  const options = [
+    {
+      key: VARIANT_STANDARD,
+      title: "Standard",
+      copy: "The cleaner race game. No respawning.",
+    },
+    {
+      key: VARIANT_RESPAWN,
+      title: "Respawn",
+      copy: "Adds a recovery move: bring back a missing pawn instead of moving.",
+    },
+  ];
+
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.variant === option.key) {
+      button.classList.add("active");
+    }
+    button.addEventListener("click", () => {
+      app.variant = option.key;
+      enterSetupMode();
+    });
+
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    rulesChoiceRow.append(button);
+  }
 }
 
 function buildChoicePreview(side, gapCol) {
@@ -531,10 +694,17 @@ function drawBoardBackground() {
       const x = settings.boardLeft + col * settings.tileSize + 8;
       const y = settings.boardTop + row * settings.tileSize + 8;
       const size = settings.tileSize - 16;
-      const color = (row + col) % 2 === 0 ? settings.checkerRed : settings.checkerYellow;
+      const color =
+        app.visualStyle === "simplified"
+          ? row % 2 === 0
+            ? "#bfe0d2"
+            : "#cae8dc"
+          : (row + col) % 2 === 0
+            ? settings.checkerRed
+            : settings.checkerYellow;
       const tileGradient = ctx.createLinearGradient(x, y, x + size, y + size);
-      tileGradient.addColorStop(0, mixHex(color, "#ffffff", 0.24));
-      tileGradient.addColorStop(1, mixHex(color, "#f6efe7", 0.12));
+      tileGradient.addColorStop(0, mixHex(color, "#ffffff", app.visualStyle === "simplified" ? 0.34 : 0.24));
+      tileGradient.addColorStop(1, mixHex(color, "#f6efe7", app.visualStyle === "simplified" ? 0.04 : 0.12));
 
       ctx.save();
       ctx.shadowColor = "rgba(164,121,74,0.12)";
@@ -545,16 +715,25 @@ function drawBoardBackground() {
       ctx.fill();
       ctx.restore();
 
-      drawRoundedRect(x, y, size, size, 22, "rgba(255,255,255,0.06)", "rgba(255,255,255,0.7)", 1.5);
-      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, "rgba(255,255,255,0.22)");
-      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, "rgba(255,255,255,0.18)", 1.5);
+      drawRoundedRect(
+        x,
+        y,
+        size,
+        size,
+        22,
+        "rgba(255,255,255,0.06)",
+        app.visualStyle === "simplified" ? "rgba(247,255,251,0.58)" : "rgba(255,255,255,0.7)",
+        1.5,
+      );
+      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, app.visualStyle === "simplified" ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.22)");
+      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, app.visualStyle === "simplified" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.18)", 1.5);
     }
   }
 
   for (let seamIndex = 0; seamIndex < ROWS; seamIndex += 1) {
     const y = settings.boardTop + seamIndex * settings.tileSize;
-    ctx.strokeStyle = "rgba(255, 250, 241, 0.92)";
-    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = app.visualStyle === "simplified" ? "rgba(247, 255, 251, 0.98)" : "rgba(255, 250, 241, 0.92)";
+    ctx.lineWidth = app.visualStyle === "simplified" ? 4.5 : 3.5;
     ctx.beginPath();
     ctx.moveTo(settings.boardLeft + 8, y);
     ctx.lineTo(settings.boardLeft + settings.tileSize * COLS - 8, y);
@@ -562,8 +741,8 @@ function drawBoardBackground() {
   }
   for (let seamIndex = 1; seamIndex < COLS; seamIndex += 1) {
     const x = settings.boardLeft + seamIndex * settings.tileSize;
-    ctx.strokeStyle = "rgba(213, 176, 138, 0.72)";
-    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = app.visualStyle === "simplified" ? "rgba(154, 180, 168, 0.4)" : "rgba(213, 176, 138, 0.72)";
+    ctx.lineWidth = app.visualStyle === "simplified" ? 1.5 : 2.5;
     ctx.beginPath();
     ctx.moveTo(x, settings.boardTop + 8);
     ctx.lineTo(x, settings.boardTop + settings.tileSize * (ROWS - 1) - 8);
@@ -575,7 +754,7 @@ function drawBoardBackground() {
 }
 
 function drawTargetGlow(side) {
-  const seamRow = targetRow(side);
+  const seamRow = targetRow(side, app.state.variant);
   const { y } = positionToPixel([seamRow, 0]);
   const glow = ctx.createRadialGradient(LOGICAL_CANVAS_WIDTH / 2, y, 10, LOGICAL_CANVAS_WIDTH / 2, y, settings.tileSize * 2.7);
   glow.addColorStop(0, `${side === WHITE ? "rgba(227, 68, 54, 0.34)" : "rgba(248, 210, 55, 0.34)"}`);
@@ -597,12 +776,12 @@ function drawEdgePositions() {
   for (let row = 0; row < ROWS; row += 1) {
     for (let col = 0; col < COLS; col += 1) {
       const { x, y } = positionToPixel([row, col]);
-      ctx.fillStyle = "rgba(243, 248, 250, 0.96)";
+      ctx.fillStyle = app.visualStyle === "simplified" ? "rgba(244, 255, 249, 0.98)" : "rgba(243, 248, 250, 0.96)";
       ctx.beginPath();
-      ctx.arc(x, y, 10, 0, Math.PI * 2);
+      ctx.arc(x, y, app.visualStyle === "simplified" ? 12 : 10, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "rgba(213, 176, 138, 0.85)";
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = app.visualStyle === "simplified" ? "rgba(154, 180, 168, 0.9)" : "rgba(213, 176, 138, 0.85)";
+      ctx.lineWidth = app.visualStyle === "simplified" ? 2 : 1.5;
       ctx.stroke();
     }
   }
@@ -636,23 +815,33 @@ function drawEdgePositions() {
       const point = positionToPixel(move.to);
       drawMoveMarker(point.x, point.y);
     }
+  } else if (app.variant === VARIANT_RESPAWN && app.respawnArmed) {
+    for (const move of respawnMovesByDestination().values()) {
+      const point = positionToPixel(move.to);
+      drawMoveMarker(point.x, point.y, true);
+    }
   }
 }
 
-function drawMoveMarker(x, y) {
-  ctx.fillStyle = "rgba(85, 232, 198, 0.5)";
+function drawMoveMarker(x, y, respawn = false) {
+  ctx.fillStyle = respawn ? "rgba(85, 232, 198, 0.22)" : "rgba(85, 232, 198, 0.5)";
   ctx.beginPath();
-  ctx.arc(x, y, 18, 0, Math.PI * 2);
+  ctx.arc(x, y, 23, 0, Math.PI * 2);
   ctx.fill();
+  if (respawn) {
+    ctx.strokeStyle = "rgba(85, 232, 198, 0.78)";
+    ctx.lineWidth = 3;
+    ctx.stroke();
+  }
   ctx.fillStyle = "rgba(255,255,255,0.95)";
   ctx.beginPath();
-  ctx.arc(x, y, 8, 0, Math.PI * 2);
+  ctx.arc(x, y, 10, 0, Math.PI * 2);
   ctx.fill();
 }
 
 function drawTrianglePiece(piece, x, y, selected = false) {
   const baseColor = colorForPiece(piece);
-  const outline = mixHex(baseColor, "#6c5547", 0.18);
+  const outline = app.visualStyle === "simplified" ? mixHex(baseColor, "#5f6a66", 0.28) : mixHex(baseColor, "#6c5547", 0.18);
   const isPawn = piece.kind === PAWN;
   const width = isPawn ? 48 : 62;
   const height = isPawn ? 34 : 74;
@@ -660,7 +849,39 @@ function drawTrianglePiece(piece, x, y, selected = false) {
 
   let points;
   let shine;
-  if (piece.side === WHITE) {
+  if (app.visualStyle === "simplified" && !isPawn) {
+    if (piece.side === WHITE) {
+      points = [
+        [x, y - height + seamLift],
+        [x + width * 0.32, y - height * 0.42],
+        [x + width * 0.28, y + seamLift - 2],
+        [x, y + seamLift + 10],
+        [x - width * 0.28, y + seamLift - 2],
+        [x - width * 0.32, y - height * 0.42],
+      ];
+      shine = [
+        [x, y - height + seamLift + 10],
+        [x + width * 0.12, y - height * 0.34],
+        [x + width * 0.04, y + seamLift - 8],
+        [x - width * 0.12, y - height * 0.3],
+      ];
+    } else {
+      points = [
+        [x - width * 0.28, y - seamLift + 2],
+        [x, y - seamLift - 10],
+        [x + width * 0.28, y - seamLift + 2],
+        [x + width * 0.32, y + height * 0.42],
+        [x, y + height - seamLift],
+        [x - width * 0.32, y + height * 0.42],
+      ];
+      shine = [
+        [x + width * 0.1, y - seamLift + 6],
+        [x + width * 0.14, y + height * 0.18],
+        [x, y + height - seamLift - 14],
+        [x - width * 0.08, y + height * 0.14],
+      ];
+    }
+  } else if (piece.side === WHITE) {
     points = [
       [x, y - height + seamLift],
       [x - width / 2, y + seamLift],
@@ -803,7 +1024,8 @@ function tick(now) {
   requestAnimationFrame(tick);
 }
 
-function onCanvasClick(event) {
+function onCanvasPointer(event) {
+  event.preventDefault();
   if (app.setupMode || app.animation || currentWinner() !== null || !isHumanTurn()) {
     return;
   }
@@ -814,12 +1036,34 @@ function onCanvasClick(event) {
   const y = (event.clientY - rect.top) * scaleY;
   const clicked = pointToCoord(x, y);
   if (!clicked) {
-    app.selected = null;
+    refreshUi();
+    return;
+  }
+
+  if (app.respawnArmed) {
+    const respawnMove = respawnMovesByDestination().get(clicked.join(","));
+    if (respawnMove) {
+      startMove(respawnMove);
+      return;
+    }
+    const piece = app.state.board[clicked[0]][clicked[1]];
+    if (piece && piece.side === app.state.sideToMove && getLegalMovesFrom(app.state, clicked).length > 0) {
+      app.respawnArmed = false;
+      app.selected = clicked;
+    } else {
+      app.respawnArmed = false;
+      app.selected = null;
+    }
     refreshUi();
     return;
   }
 
   if (app.selected) {
+    if (app.selected[0] === clicked[0] && app.selected[1] === clicked[1]) {
+      app.selected = null;
+      refreshUi();
+      return;
+    }
     const moves = getLegalMovesFrom(app.state, app.selected);
     const chosen = moves.find((move) => move.to[0] === clicked[0] && move.to[1] === clicked[1]);
     if (chosen) {
@@ -831,8 +1075,9 @@ function onCanvasClick(event) {
 
   const piece = app.state.board[clicked[0]][clicked[1]];
   if (piece && piece.side === app.state.sideToMove && getLegalMovesFrom(app.state, clicked).length > 0) {
+    app.respawnArmed = false;
     app.selected = clicked;
-  } else {
+  } else if (!app.selected) {
     app.selected = null;
   }
   refreshUi();
@@ -845,8 +1090,30 @@ function cycleDifficulty() {
   refreshUi();
 }
 
+function toggleRespawnArmed() {
+  if (!respawnButton) {
+    return;
+  }
+  if (app.respawnArmed) {
+    app.respawnArmed = false;
+    refreshUi();
+    return;
+  }
+  if (!canArmRespawn()) {
+    return;
+  }
+  app.selected = null;
+  app.respawnArmed = true;
+  refreshUi();
+}
+
 function toggleMode() {
   app.playMode = app.playMode === PLAY_MODE_AI ? PLAY_MODE_HOTSEAT : PLAY_MODE_AI;
+  enterSetupMode();
+}
+
+function toggleVariant() {
+  app.variant = app.variant === VARIANT_STANDARD ? VARIANT_RESPAWN : VARIANT_STANDARD;
   enterSetupMode();
 }
 
@@ -858,14 +1125,20 @@ function swapAgentSide() {
   enterSetupMode();
 }
 
-restartButton.addEventListener("click", () => resetGame());
+restartButton.addEventListener("click", () => enterSetupMode());
 openingButton.addEventListener("click", () => enterSetupMode());
 modeButton.addEventListener("click", toggleMode);
+if (variantButton) {
+  variantButton.addEventListener("click", toggleVariant);
+}
 difficultyButton.addEventListener("click", cycleDifficulty);
 swapButton.addEventListener("click", swapAgentSide);
+if (respawnButton) {
+  respawnButton.addEventListener("click", toggleRespawnArmed);
+}
 setupButton.addEventListener("click", advanceSetup);
-rematchOverlayButton.addEventListener("click", () => resetGame());
-canvas.addEventListener("click", onCanvasClick);
+rematchOverlayButton.addEventListener("click", () => enterSetupMode());
+canvas.addEventListener("pointerdown", onCanvasPointer);
 window.addEventListener("resize", resizeCanvas);
 
 window.addEventListener("keydown", (event) => {

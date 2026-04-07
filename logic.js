@@ -4,7 +4,12 @@ export const WHITE = "W";
 export const BLACK = "B";
 export const PAWN = "P";
 export const KNIGHT = "N";
-export const HOME_ROW_FROM_SIDE = 5;
+export const VARIANT_STANDARD = "standard";
+export const VARIANT_RESPAWN = "respawn";
+export const STANDARD_HOME_ROW_FROM_SIDE = 5;
+export const RESPAWN_HOME_ROW_FROM_SIDE = 5;
+export const RESPAWN_ROW_FROM_SIDE = 2;
+export const RESPAWN_ORIGIN_ROW = -1;
 
 export const DIFFICULTY_PROFILES = {
   easy: { name: "easy", depth: 2, randomness: 0.35, topK: 3 },
@@ -13,7 +18,7 @@ export const DIFFICULTY_PROFILES = {
 };
 
 export function sideName(side) {
-  return side === WHITE ? "White" : "Black";
+  return side === WHITE ? "Bottom" : "Top";
 }
 
 export function enemyOf(side) {
@@ -38,11 +43,17 @@ export function cloneState(state) {
     sideToMove: state.sideToMove,
     whiteKnightsHome: state.whiteKnightsHome,
     blackKnightsHome: state.blackKnightsHome,
+    variant: state.variant ?? VARIANT_STANDARD,
   };
 }
 
-export function targetRow(side) {
-  return side === WHITE ? HOME_ROW_FROM_SIDE - 1 : ROWS - HOME_ROW_FROM_SIDE;
+export function targetRow(side, variant = VARIANT_STANDARD) {
+  const homeRowFromSide = variant === VARIANT_RESPAWN ? RESPAWN_HOME_ROW_FROM_SIDE : STANDARD_HOME_ROW_FROM_SIDE;
+  return side === WHITE ? homeRowFromSide - 1 : ROWS - homeRowFromSide;
+}
+
+export function respawnRow(side) {
+  return side === WHITE ? RESPAWN_ROW_FROM_SIDE - 1 : ROWS - RESPAWN_ROW_FROM_SIDE;
 }
 
 export function forwardDir(side) {
@@ -69,7 +80,7 @@ export function liveKnights(state, side) {
   return locate(state, side, KNIGHT).length;
 }
 
-export function createInitialState(whiteGap = 2, blackGap = 2) {
+export function createInitialState(whiteGap = 2, blackGap = 2, variant = VARIANT_STANDARD) {
   const board = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
   for (let col = 0; col < COLS; col += 1) {
     if (col === whiteGap) {
@@ -90,6 +101,7 @@ export function createInitialState(whiteGap = 2, blackGap = 2) {
     sideToMove: WHITE,
     whiteKnightsHome: 0,
     blackKnightsHome: 0,
+    variant,
   };
 }
 
@@ -99,6 +111,10 @@ function moveKey(move) {
 
 export function moveToString(move) {
   return moveKey(move);
+}
+
+export function isRespawnMove(move) {
+  return move.from[0] === RESPAWN_ORIGIN_ROW;
 }
 
 export function winner(state) {
@@ -300,7 +316,7 @@ function knightMoveReachesHome(state, move) {
     return false;
   }
 
-  const homeRow = targetRow(piece.side);
+  const homeRow = targetRow(piece.side, state.variant);
   const path = reconstructKnightPath(state, move);
   if (!path) {
     return false;
@@ -327,6 +343,18 @@ export function getLegalMoves(state) {
       }
     }
   }
+  if (state.variant === VARIANT_RESPAWN) {
+    const side = state.sideToMove;
+    const livePawns = locate(state, side, PAWN).length;
+    if (livePawns < COLS - 1) {
+      const row = respawnRow(side);
+      for (let col = 0; col < COLS; col += 1) {
+        if (state.board[row][col] === null) {
+          moves.push({ from: [RESPAWN_ORIGIN_ROW, col], to: [row, col] });
+        }
+      }
+    }
+  }
   return moves;
 }
 
@@ -336,12 +364,18 @@ export function getLegalMovesFrom(state, start) {
 
 export function applyMove(state, move) {
   const [[fromRow, fromCol], [toRow, toCol]] = [move.from, move.to];
+  const nextState = cloneState(state);
+  if (isRespawnMove(move)) {
+    nextState.board[toRow][toCol] = createPiece(state.sideToMove, PAWN);
+    nextState.sideToMove = enemyOf(state.sideToMove);
+    return nextState;
+  }
+
   const piece = state.board[fromRow][fromCol];
   if (!piece) {
     throw new Error(`No piece at ${fromRow},${fromCol}`);
   }
 
-  const nextState = cloneState(state);
   if (piece.kind === PAWN) {
     nextState.board[fromRow][fromCol] = null;
     nextState.board[toRow][toCol] = createPiece(piece.side, piece.kind);
@@ -367,10 +401,10 @@ export function applyMove(state, move) {
   }
 
   if (piece.kind === KNIGHT) {
-    if (piece.side === WHITE && fromRow < targetRow(WHITE) && knightMoveReachesHome(state, move)) {
+    if (piece.side === WHITE && fromRow < targetRow(WHITE, state.variant) && knightMoveReachesHome(state, move)) {
       nextState.whiteKnightsHome += 1;
     }
-    if (piece.side === BLACK && fromRow > targetRow(BLACK) && knightMoveReachesHome(state, move)) {
+    if (piece.side === BLACK && fromRow > targetRow(BLACK, state.variant) && knightMoveReachesHome(state, move)) {
       nextState.blackKnightsHome += 1;
     }
   }
@@ -381,6 +415,9 @@ export function applyMove(state, move) {
 
 function immediateScoringMoves(state) {
   return getLegalMoves(state).filter((move) => {
+    if (isRespawnMove(move)) {
+      return false;
+    }
     const piece = state.board[move.from[0]][move.from[1]];
     return piece && piece.kind === KNIGHT && knightMoveReachesHome(state, move);
   });
@@ -438,8 +475,8 @@ function evaluate(state, side) {
   score -= 16 * threatenedTargets(state, enemy, PAWN).length;
   score += 12 * threatenedTargets(state, side, PAWN).length;
 
-  const myTargetRow = targetRow(side);
-  const oppTargetRow = targetRow(enemy);
+  const myTargetRow = targetRow(side, state.variant);
+  const oppTargetRow = targetRow(enemy, state.variant);
 
   for (const [row, col] of locate(state, side, KNIGHT)) {
     score += 18 * (ROWS - Math.abs(myTargetRow - row));
@@ -467,10 +504,13 @@ function boardKey(state) {
       flat.push(piece ? `${piece.side}${piece.kind}` : "..");
     }
   }
-  return `${flat.join("")}|${state.sideToMove}|${state.whiteKnightsHome}|${state.blackKnightsHome}`;
+  return `${flat.join("")}|${state.sideToMove}|${state.whiteKnightsHome}|${state.blackKnightsHome}|${state.variant ?? VARIANT_STANDARD}`;
 }
 
 function movePriority(state, move) {
+  if (isRespawnMove(move)) {
+    return 35;
+  }
   const piece = state.board[move.from[0]][move.from[1]];
   const target = state.board[move.to[0]][move.to[1]];
   let priority = 0;
