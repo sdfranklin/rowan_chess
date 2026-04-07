@@ -39,6 +39,10 @@ const setupTitle = document.getElementById("setup-title");
 const setupCopy = document.getElementById("setup-copy");
 const setupChoices = document.getElementById("setup-choices");
 const setupButton = document.getElementById("setup-button");
+const previewOptions = document.getElementById("preview-options");
+const modeChoiceRow = document.getElementById("mode-choice-row");
+const difficultyChoiceRow = document.getElementById("difficulty-choice-row");
+const sideChoiceRow = document.getElementById("side-choice-row");
 const visualChoiceRow = document.getElementById("visual-choice-row");
 const rulesChoiceRow = document.getElementById("rules-choice-row");
 const winOverlay = document.getElementById("win-overlay");
@@ -98,6 +102,10 @@ const app = {
   confetti: [],
   celebratedWinner: null,
 };
+
+function inSetupSettingsStage() {
+  return app.setupMode && app.setupStage === "settings";
+}
 
 function humanSide() {
   if (app.playMode === PLAY_MODE_HOTSEAT) {
@@ -191,17 +199,7 @@ function resetGame({ keepMode = true } = {}) {
 
 function enterSetupMode() {
   app.setupMode = true;
-  if (app.playMode === PLAY_MODE_AI) {
-    if (humanSide() === WHITE) {
-      app.blackGap = Math.floor(Math.random() * COLS);
-      app.setupStage = "playerWhite";
-    } else {
-      app.whiteGap = Math.floor(Math.random() * COLS);
-      app.setupStage = "playerBlack";
-    }
-  } else {
-    app.setupStage = "whitePick";
-  }
+  app.setupStage = "settings";
   app.state = createInitialState(app.whiteGap, app.blackGap, app.variant);
   app.selected = null;
   app.respawnArmed = false;
@@ -217,7 +215,29 @@ function startMatch() {
   resetGame();
 }
 
+function beginOpeningSetup() {
+  if (app.playMode === PLAY_MODE_AI) {
+    if (humanSide() === WHITE) {
+      app.blackGap = Math.floor(Math.random() * COLS);
+      app.setupStage = "playerWhite";
+    } else {
+      app.whiteGap = Math.floor(Math.random() * COLS);
+      app.setupStage = "playerBlack";
+    }
+  } else {
+    app.setupStage = "whitePick";
+  }
+  app.state = createInitialState(app.whiteGap, app.blackGap, app.variant);
+  app.selected = null;
+  app.lastMove = null;
+  refreshUi();
+}
+
 function advanceSetup() {
+  if (app.setupStage === "settings") {
+    beginOpeningSetup();
+    return;
+  }
   if (app.setupStage === "whitePick") {
     app.setupStage = "passBlack";
     refreshUi();
@@ -448,6 +468,9 @@ function refreshUi() {
 }
 
 function setupStatusText() {
+  if (app.setupStage === "settings") {
+    return "Choose the game first, then move on to hidden opening positions.";
+  }
   if (app.setupStage === "whitePick") {
     return "Bottom: choose your opening gap without showing Top.";
   }
@@ -470,6 +493,15 @@ function renderSetupOverlay() {
   }
   setupOverlay.classList.remove("hidden");
   setupChoices.replaceChildren();
+  if (modeChoiceRow) {
+    modeChoiceRow.replaceChildren();
+  }
+  if (difficultyChoiceRow) {
+    difficultyChoiceRow.replaceChildren();
+  }
+  if (sideChoiceRow) {
+    sideChoiceRow.replaceChildren();
+  }
   if (visualChoiceRow) {
     visualChoiceRow.replaceChildren();
   }
@@ -477,24 +509,39 @@ function renderSetupOverlay() {
     rulesChoiceRow.replaceChildren();
   }
 
-  setupTitle.textContent = "Choose Opening Layout";
-  if (app.setupStage === "whitePick") {
+  if (app.setupStage === "settings") {
+    setupTitle.textContent = "Choose Your Game";
+    setupCopy.textContent = "Set the game mode and look first. You will choose hidden opening positions after this.";
+  } else if (app.setupStage === "whitePick") {
+    setupTitle.textContent = "Choose Opening Layout";
     setupCopy.textContent = `Bottom chooses now. Current gap: column ${app.whiteGap + 1}.`;
   } else if (app.setupStage === "passBlack") {
+    setupTitle.textContent = "Choose Opening Layout";
     setupCopy.textContent = "Bottom is hidden. Hand over to Top, then click Top Turn.";
   } else if (app.setupStage === "blackPick") {
+    setupTitle.textContent = "Choose Opening Layout";
     setupCopy.textContent = `Top chooses now. Current gap: column ${app.blackGap + 1}.`;
   } else if (app.setupStage === "playerWhite") {
+    setupTitle.textContent = "Choose Opening Layout";
     setupCopy.textContent = `Choose your gap as Bottom. The computer's gap is hidden. Current gap: column ${app.whiteGap + 1}.`;
   } else {
+    setupTitle.textContent = "Choose Opening Layout";
     setupCopy.textContent = `Choose your gap as Top. The computer's gap is hidden. Current gap: column ${app.blackGap + 1}.`;
   }
 
+  renderModeChoices();
+  renderDifficultyChoices();
+  renderSideChoices();
   renderVisualChoices();
   renderRulesChoices();
 
   const visibleSide = setupVisibleSide();
-  if (visibleSide) {
+  if (previewOptions) {
+    previewOptions.classList.toggle("hidden", app.setupStage !== "settings");
+  }
+  const showOpeningChoices = app.setupStage !== "settings";
+  setupChoices.classList.toggle("hidden", !showOpeningChoices);
+  if (visibleSide && showOpeningChoices) {
     for (let col = 0; col < COLS; col += 1) {
       const button = document.createElement("button");
       button.type = "button";
@@ -523,7 +570,118 @@ function renderSetupOverlay() {
     }
   }
 
-  setupButton.textContent = app.setupStage === "whitePick" ? "Lock Bottom Choice" : app.setupStage === "passBlack" ? "Top Turn" : "Start Match";
+  setupButton.textContent =
+    app.setupStage === "settings"
+      ? "Choose Opening Layout"
+      : app.setupStage === "whitePick"
+        ? "Lock Bottom Choice"
+        : app.setupStage === "passBlack"
+          ? "Top Turn"
+          : "Start Match";
+}
+
+function renderModeChoices() {
+  if (!modeChoiceRow) {
+    return;
+  }
+  const options = [
+    { key: PLAY_MODE_AI, title: "Vs Computer", copy: "Play against the computer." },
+    { key: PLAY_MODE_HOTSEAT, title: "Two Players", copy: "Pass the phone between turns." },
+  ];
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.playMode === option.key) {
+      button.classList.add("active");
+    }
+    button.addEventListener("click", () => {
+      app.playMode = option.key;
+      refreshUi();
+    });
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    modeChoiceRow.append(button);
+  }
+}
+
+function renderDifficultyChoices() {
+  if (!difficultyChoiceRow) {
+    return;
+  }
+  const options = Object.keys(DIFFICULTY_PROFILES).map((key) => ({
+    key,
+    title: key[0].toUpperCase() + key.slice(1),
+    copy:
+      key === "easy"
+        ? "More forgiving."
+        : key === "medium"
+          ? "Balanced challenge."
+          : "Stronger look-ahead.",
+  }));
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.difficulty === option.key) {
+      button.classList.add("active");
+    }
+    button.disabled = app.playMode !== PLAY_MODE_AI;
+    button.addEventListener("click", () => {
+      if (app.playMode !== PLAY_MODE_AI) {
+        return;
+      }
+      app.difficulty = option.key;
+      refreshUi();
+    });
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    difficultyChoiceRow.append(button);
+  }
+}
+
+function renderSideChoices() {
+  if (!sideChoiceRow) {
+    return;
+  }
+  const options = [
+    { key: BLACK, title: "Computer Top", copy: "You play as Bottom." },
+    { key: WHITE, title: "Computer Bottom", copy: "You play as Top." },
+  ];
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.agentSide === option.key) {
+      button.classList.add("active");
+    }
+    button.disabled = app.playMode !== PLAY_MODE_AI;
+    button.addEventListener("click", () => {
+      if (app.playMode !== PLAY_MODE_AI) {
+        return;
+      }
+      app.agentSide = option.key;
+      refreshUi();
+    });
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    sideChoiceRow.append(button);
+  }
 }
 
 function renderVisualChoices() {
