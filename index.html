@@ -24,6 +24,12 @@
             <p class="overlay-eyebrow">Hidden Opening</p>
             <h2 id="setup-title">Choose Opening Layout</h2>
             <p class="overlay-copy" id="setup-copy"></p>
+            <div class="preview-options" id="preview-options">
+              <p class="overlay-mini">Visual Style</p>
+              <div class="visual-choice-row" id="visual-choice-row"></div>
+              <p class="overlay-mini">Rules</p>
+              <div class="visual-choice-row" id="rules-choice-row"></div>
+            </div>
             <div class="choice-grid" id="setup-choices"></div>
             <button class="primary-button" id="setup-button" type="button">Start Match</button>
           </div>
@@ -56,9 +62,9 @@
         <div class="rules-header">
           <div>
             <p class="eyebrow">Rules</p>
-            <h2 id="rules-title">How To Play</h2>
+            <h2 id="rules-title">Choose Your Game</h2>
           </div>
-          <p class="rules-note">Learn the standard game here, then choose your hidden opening and start playing.</p>
+          <p class="rules-note">Pick the style of game you want, then choose your hidden opening.</p>
         </div>
 
         <div class="rules-grid">
@@ -78,11 +84,21 @@
             <h3>Scoring And Winning</h3>
             <ul>
               <li>At the beginning of the game each player secretly chooses one of their five columns to be empty.</li>
-              <li>The home line is 5 spaces from the starting position of your knights. A knight on or beyond the home line is considered home.</li>
+              <li>Your knights score once they reach the home line, five spaces from where they began. A knight on or beyond that line is home.</li>
               <li>The first player to get 2 knights home wins immediately.</li>
               <li>If both players are down to 1 live knight, the player with the first of these knights home wins.</li>
               <li>If a player loses all their knights, they immediately lose.</li>
               <li>If a player has no legal moves, that player loses.</li>
+            </ul>
+          </section>
+
+          <section class="rules-card">
+            <h3>Respawn Variant</h3>
+            <ul>
+              <li>Respawn keeps the same race to the home line.</li>
+              <li>Instead of moving, a player may bring back one missing pawn on their second row.</li>
+              <li>Respawning uses the whole turn.</li>
+              <li>Choose Standard or Respawn before the game begins.</li>
             </ul>
           </section>
 
