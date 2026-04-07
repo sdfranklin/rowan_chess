@@ -60,8 +60,8 @@ const settings = {
   boardLeft: 155,
   boardTop: 116,
   animationMs: 200,
-  checkerRed: "#ef8e84",
-  checkerYellow: "#f5d773",
+  checkerRed: "#e68079",
+  checkerYellow: "#e4bc48",
   seam: "#fff6ea",
   seamDark: "#d5b08a",
   panelText: "#58301d",
@@ -703,8 +703,8 @@ function drawBoardBackground() {
             ? settings.checkerRed
             : settings.checkerYellow;
       const tileGradient = ctx.createLinearGradient(x, y, x + size, y + size);
-      tileGradient.addColorStop(0, mixHex(color, "#ffffff", app.visualStyle === "simplified" ? 0.34 : 0.24));
-      tileGradient.addColorStop(1, mixHex(color, "#f6efe7", app.visualStyle === "simplified" ? 0.04 : 0.12));
+      tileGradient.addColorStop(0, mixHex(color, "#ffffff", app.visualStyle === "simplified" ? 0.34 : 0.16));
+      tileGradient.addColorStop(1, mixHex(color, "#f0e0c8", app.visualStyle === "simplified" ? 0.04 : 0.04));
 
       ctx.save();
       ctx.shadowColor = "rgba(164,121,74,0.12)";
@@ -722,11 +722,11 @@ function drawBoardBackground() {
         size,
         22,
         "rgba(255,255,255,0.06)",
-        app.visualStyle === "simplified" ? "rgba(247,255,251,0.58)" : "rgba(255,255,255,0.7)",
+        app.visualStyle === "simplified" ? "rgba(247,255,251,0.58)" : "rgba(255,248,238,0.82)",
         1.5,
       );
-      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, app.visualStyle === "simplified" ? "rgba(255,255,255,0.16)" : "rgba(255,255,255,0.22)");
-      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, app.visualStyle === "simplified" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.18)", 1.5);
+      drawRoundedRect(x + 12, y + 10, size - 24, size - 44, 16, app.visualStyle === "simplified" ? "rgba(255,255,255,0.16)" : "rgba(255,250,242,0.16)");
+      drawRoundedRect(x + 12, y + 12, size - 24, size - 24, 18, null, app.visualStyle === "simplified" ? "rgba(255,255,255,0.12)" : "rgba(255,245,232,0.12)", 1.5);
     }
   }
 
