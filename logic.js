@@ -29,12 +29,12 @@ export function inBounds(row, col) {
   return row >= 0 && row < ROWS && col >= 0 && col < COLS;
 }
 
-export function createPiece(side, kind) {
-  return { side, kind };
+export function createPiece(side, kind, scored = false) {
+  return { side, kind, scored };
 }
 
 export function clonePiece(piece) {
-  return piece ? { side: piece.side, kind: piece.kind } : null;
+  return piece ? { side: piece.side, kind: piece.kind, scored: piece.scored === true } : null;
 }
 
 export function cloneState(state) {
@@ -80,6 +80,24 @@ export function liveKnights(state, side) {
   return locate(state, side, KNIGHT).length;
 }
 
+function knightCounts(state, side) {
+  let scored = 0;
+  let unscored = 0;
+  for (const [row, col] of locate(state, side, KNIGHT)) {
+    if (state.board[row][col].scored) {
+      scored += 1;
+    } else {
+      unscored += 1;
+    }
+  }
+  return { scored, unscored, total: scored + unscored };
+}
+
+function rowIsHomeOrBeyond(row, side, variant) {
+  const homeRow = targetRow(side, variant);
+  return side === WHITE ? row >= homeRow : row <= homeRow;
+}
+
 export function createInitialState(whiteGap = 2, blackGap = 2, variant = VARIANT_STANDARD) {
   const board = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
   for (let col = 0; col < COLS; col += 1) {
@@ -107,6 +125,10 @@ export function createInitialState(whiteGap = 2, blackGap = 2, variant = VARIANT
 
 function moveKey(move) {
   return `${move.from[0]},${move.from[1]}-${move.to[0]},${move.to[1]}`;
+}
+
+function pieceKey(piece) {
+  return `${piece.side}${piece.kind}${piece.scored ? "H" : "_"}`;
 }
 
 export function moveToString(move) {
@@ -312,20 +334,14 @@ function reconstructKnightPath(state, move) {
 
 function knightMoveReachesHome(state, move) {
   const piece = state.board[move.from[0]][move.from[1]];
-  if (!piece || piece.kind !== KNIGHT) {
+  if (!piece || piece.kind !== KNIGHT || piece.scored) {
     return false;
   }
-
-  const homeRow = targetRow(piece.side, state.variant);
   const path = reconstructKnightPath(state, move);
   if (!path) {
     return false;
   }
-
-  if (piece.side === WHITE) {
-    return path.some(([row]) => row >= homeRow);
-  }
-  return path.some(([row]) => row <= homeRow);
+  return path.some(([row]) => rowIsHomeOrBeyond(row, piece.side, state.variant));
 }
 
 export function getLegalMoves(state) {
@@ -378,7 +394,7 @@ export function applyMove(state, move) {
 
   if (piece.kind === PAWN) {
     nextState.board[fromRow][fromCol] = null;
-    nextState.board[toRow][toCol] = createPiece(piece.side, piece.kind);
+    nextState.board[toRow][toCol] = createPiece(piece.side, piece.kind, piece.scored === true);
   } else {
     const enemy = enemyOf(piece.side);
     const path = reconstructKnightPath(nextState, move);
@@ -388,23 +404,26 @@ export function applyMove(state, move) {
 
     let currentRow = fromRow;
     let currentCol = fromCol;
+    let movingPiece = createPiece(piece.side, piece.kind, piece.scored === true);
+    let scoredThisMove = false;
     for (const [nextRow, nextCol] of path) {
       const landing = nextState.board[nextRow][nextCol];
       nextState.board[currentRow][currentCol] = null;
       if (landing && landing.side === enemy && landing.kind === PAWN) {
         nextState.board[nextRow][nextCol] = null;
       }
-      nextState.board[nextRow][nextCol] = createPiece(piece.side, piece.kind);
+      if (!movingPiece.scored && rowIsHomeOrBeyond(nextRow, movingPiece.side, state.variant)) {
+        movingPiece = createPiece(movingPiece.side, movingPiece.kind, true);
+        scoredThisMove = true;
+      }
+      nextState.board[nextRow][nextCol] = clonePiece(movingPiece);
       currentRow = nextRow;
       currentCol = nextCol;
     }
-  }
-
-  if (piece.kind === KNIGHT) {
-    if (piece.side === WHITE && fromRow < targetRow(WHITE, state.variant) && knightMoveReachesHome(state, move)) {
+    if (scoredThisMove && piece.side === WHITE) {
       nextState.whiteKnightsHome += 1;
     }
-    if (piece.side === BLACK && fromRow > targetRow(BLACK, state.variant) && knightMoveReachesHome(state, move)) {
+    if (scoredThisMove && piece.side === BLACK) {
       nextState.blackKnightsHome += 1;
     }
   }
@@ -419,7 +438,7 @@ function immediateScoringMoves(state) {
       return false;
     }
     const piece = state.board[move.from[0]][move.from[1]];
-    return piece && piece.kind === KNIGHT && knightMoveReachesHome(state, move);
+    return piece && piece.kind === KNIGHT && !piece.scored && knightMoveReachesHome(state, move);
   });
 }
 
@@ -452,14 +471,15 @@ function evaluate(state, side) {
   const enemy = enemyOf(side);
   const myHome = side === WHITE ? state.whiteKnightsHome : state.blackKnightsHome;
   const oppHome = side === WHITE ? state.blackKnightsHome : state.whiteKnightsHome;
-  let score = 520 * (myHome - oppHome);
+  let score = 900 * (myHome - oppHome);
 
   const myPawns = locate(state, side, PAWN).length;
-  const myKnights = locate(state, side, KNIGHT).length;
   const oppPawns = locate(state, enemy, PAWN).length;
-  const oppKnights = locate(state, enemy, KNIGHT).length;
-  score += 28 * (myPawns - oppPawns);
-  score += 280 * (myKnights - oppKnights);
+  const myKnightData = knightCounts(state, side);
+  const oppKnightData = knightCounts(state, enemy);
+  score += 70 * (myPawns - oppPawns);
+  score += 260 * (myKnightData.unscored - oppKnightData.unscored);
+  score += 55 * (myKnightData.scored - oppKnightData.scored);
 
   const myMobilityState = cloneState(state);
   myMobilityState.sideToMove = side;
@@ -467,31 +487,59 @@ function evaluate(state, side) {
   oppMobilityState.sideToMove = enemy;
   score += 3 * (getLegalMoves(myMobilityState).length - getLegalMoves(oppMobilityState).length);
 
-  score += 120 * immediateScoringMoves(myMobilityState).length;
-  score -= 380 * immediateScoringMoves(oppMobilityState).length;
+  score += 180 * immediateScoringMoves(myMobilityState).length;
+  score -= 520 * immediateScoringMoves(oppMobilityState).length;
 
-  score -= 240 * threatenedTargets(state, enemy, KNIGHT).length;
-  score += 140 * threatenedTargets(state, side, KNIGHT).length;
+  const myKnightThreats = threatenedTargets(state, enemy, KNIGHT);
+  const oppKnightThreats = threatenedTargets(state, side, KNIGHT);
+  let myScoredThreats = 0;
+  let myUnscoredThreats = 0;
+  for (const [row, col] of myKnightThreats) {
+    if (state.board[row][col].scored) {
+      myScoredThreats += 1;
+    } else {
+      myUnscoredThreats += 1;
+    }
+  }
+  let oppScoredThreats = 0;
+  let oppUnscoredThreats = 0;
+  for (const [row, col] of oppKnightThreats) {
+    if (state.board[row][col].scored) {
+      oppScoredThreats += 1;
+    } else {
+      oppUnscoredThreats += 1;
+    }
+  }
+  score -= 320 * myUnscoredThreats;
+  score -= 60 * myScoredThreats;
+  score += 190 * oppUnscoredThreats;
+  score += 25 * oppScoredThreats;
   score -= 24 * threatenedTargets(state, enemy, PAWN).length;
   score += 18 * threatenedTargets(state, side, PAWN).length;
 
-  if (myKnights === 1) {
-    score -= 220;
+  if (myKnightData.total === 1) {
+    score -= 280;
   }
-  if (oppKnights === 1) {
-    score += 150;
+  if (oppKnightData.total === 1) {
+    score += 170;
   }
 
   const myTargetRow = targetRow(side, state.variant);
   const oppTargetRow = targetRow(enemy, state.variant);
 
   for (const [row, col] of locate(state, side, KNIGHT)) {
-    score += 14 * (ROWS - Math.abs(myTargetRow - row));
-    score += 5 * (2 - Math.abs(2 - col));
+    const piece = state.board[row][col];
+    if (!piece.scored) {
+      score += 28 * (ROWS - Math.abs(myTargetRow - row));
+      score += 8 * (2 - Math.abs(2 - col));
+    }
   }
   for (const [row, col] of locate(state, enemy, KNIGHT)) {
-    score -= 14 * (ROWS - Math.abs(oppTargetRow - row));
-    score -= 5 * (2 - Math.abs(2 - col));
+    const piece = state.board[row][col];
+    if (!piece.scored) {
+      score -= 28 * (ROWS - Math.abs(oppTargetRow - row));
+      score -= 8 * (2 - Math.abs(2 - col));
+    }
   }
   for (const [row] of locate(state, side, PAWN)) {
     score += 3 * (ROWS - Math.abs(myTargetRow - row));
@@ -508,7 +556,7 @@ function boardKey(state) {
   for (let row = 0; row < ROWS; row += 1) {
     for (let col = 0; col < COLS; col += 1) {
       const piece = state.board[row][col];
-      flat.push(piece ? `${piece.side}${piece.kind}` : "..");
+      flat.push(piece ? pieceKey(piece) : "..");
     }
   }
   return `${flat.join("")}|${state.sideToMove}|${state.whiteKnightsHome}|${state.blackKnightsHome}|${state.variant ?? VARIANT_STANDARD}`;
@@ -524,13 +572,13 @@ function movePriority(state, move) {
   if (piece && piece.kind === KNIGHT && knightMoveReachesHome(state, move)) {
     priority += 1000;
   }
-  if (piece && piece.kind === KNIGHT) {
+  if (piece && piece.kind === KNIGHT && !piece.scored) {
     priority += 80;
   }
   if (target) {
     priority += 100;
     if (target.kind === KNIGHT) {
-      priority += 180;
+      priority += target.scored ? 25 : 180;
     }
   }
   return priority;
@@ -596,21 +644,25 @@ function rootTacticalAdjustment(state, side) {
 
   const enemyScoring = immediateScoringMoves(enemyProbe).length;
   const myScoring = immediateScoringMoves(myProbe).length;
-  const myKnightTargets = threatenedTargets(state, enemy, KNIGHT).length;
-  const oppKnightTargets = threatenedTargets(state, side, KNIGHT).length;
+  const myKnightTargets = threatenedTargets(state, enemy, KNIGHT);
+  const oppKnightTargets = threatenedTargets(state, side, KNIGHT);
 
   let adjustment = 0;
   adjustment += 140 * myScoring;
   adjustment -= 520 * enemyScoring;
-  adjustment -= 260 * myKnightTargets;
-  adjustment += 140 * oppKnightTargets;
+  for (const [row, col] of myKnightTargets) {
+    adjustment -= state.board[row][col].scored ? 60 : 300;
+  }
+  for (const [row, col] of oppKnightTargets) {
+    adjustment += state.board[row][col].scored ? 20 : 180;
+  }
 
-  const myKnights = locate(state, side, KNIGHT).length;
-  const oppKnights = locate(state, enemy, KNIGHT).length;
-  if (myKnights === 1 && myKnightTargets > 0) {
+  const myKnightData = knightCounts(state, side);
+  const oppKnightData = knightCounts(state, enemy);
+  if (myKnightData.total === 1 && myKnightTargets.length > 0) {
     adjustment -= 420;
   }
-  if (oppKnights === 1 && oppKnightTargets > 0) {
+  if (oppKnightData.total === 1 && oppKnightTargets.length > 0) {
     adjustment += 220;
   }
   return adjustment;

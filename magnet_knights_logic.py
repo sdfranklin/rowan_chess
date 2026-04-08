@@ -53,9 +53,13 @@ def normalize_gap_column(gap_col: int) -> int:
 class Piece:
     side: str
     kind: str
+    scored: bool = False
 
     def symbol(self) -> str:
         return self.side + self.kind
+
+    def key(self) -> str:
+        return self.symbol() + ("H" if self.scored else "_")
 
 
 @dataclass
@@ -127,6 +131,16 @@ class State:
     def live_knights(self, side: str) -> int:
         return len(self.locate(side, KNIGHT))
 
+    def knight_counts(self, side: str) -> Tuple[int, int]:
+        scored = 0
+        unscored = 0
+        for row, col in self.locate(side, KNIGHT):
+            if self.board[row][col].scored:
+                scored += 1
+            else:
+                unscored += 1
+        return scored, unscored
+
     def display(self) -> str:
         lines = ["    " + "  ".join(str(col) for col in range(COLS)), "   " + "---" * COLS]
         for row in range(ROWS - 1, -1, -1):
@@ -170,8 +184,78 @@ def board_key(state: State) -> Tuple[Tuple[str, ...], str, int, int]:
     for row in range(ROWS):
         for col in range(COLS):
             piece = state.board[row][col]
-            flat.append(piece.symbol() if piece is not None else "..")
+            flat.append(piece.key() if piece is not None else "..")
     return tuple(flat), state.side_to_move, state.white_knights_home, state.black_knights_home, 0 if state.variant == VARIANT_STANDARD else 1
+
+
+def row_is_home_or_beyond(row: int, side: str, variant: str) -> bool:
+    home_row_from_side = STANDARD_HOME_ROW_FROM_SIDE
+    if variant == VARIANT_RESPAWN:
+        home_row_from_side = RESPAWN_HOME_ROW_FROM_SIDE
+    home_row = home_row_from_side - 1 if side == WHITE else ROWS - home_row_from_side
+    return row >= home_row if side == WHITE else row <= home_row
+
+
+def reconstruct_knight_path(state: State, move: Move) -> Optional[List[Coord]]:
+    (from_row, from_col), (to_row, to_col) = move
+    piece = state.board[from_row][from_col]
+    if piece is None or piece.kind != KNIGHT:
+        return None
+
+    side = piece.side
+    enemy = state.enemy(side)
+    d_row = state.forward_dir(side)
+    target = (to_row, to_col)
+
+    def build_path(
+        board: List[List[Optional[Piece]]],
+        pos: Coord,
+        path: List[Coord],
+    ) -> Optional[List[Coord]]:
+        if pos == target and path:
+            return path
+
+        row, col = pos
+        middle_row = row + d_row
+        middle_col = col
+        landing_row = row + 2 * d_row
+        landing_col = col
+        if not in_bounds(middle_row, middle_col) or not in_bounds(landing_row, landing_col):
+            return None
+
+        middle = board[middle_row][middle_col]
+        landing = board[landing_row][landing_col]
+        if middle is None or middle.kind != PAWN:
+            return None
+        if landing is not None and landing.kind == KNIGHT:
+            return None
+        if landing is not None and landing.side == side:
+            return None
+
+        next_board = [[board[r][c] for c in range(COLS)] for r in range(ROWS)]
+        knight = next_board[row][col]
+        next_board[row][col] = None
+        if landing is not None and landing.side == enemy and landing.kind == PAWN:
+            next_board[landing_row][landing_col] = None
+        next_board[landing_row][landing_col] = knight
+
+        result = build_path(next_board, (landing_row, landing_col), path + [(landing_row, landing_col)])
+        if result is not None:
+            return result
+        return None
+
+    return build_path(state.board, (from_row, from_col), [])
+
+
+def knight_move_reaches_home(state: State, move: Move) -> bool:
+    (from_row, from_col), _destination = move
+    piece = state.board[from_row][from_col]
+    if piece is None or piece.kind != KNIGHT or piece.scored:
+        return False
+    path = reconstruct_knight_path(state, move)
+    if path is None:
+        return False
+    return any(row_is_home_or_beyond(row, piece.side, state.variant) for row, _col in path)
 
 
 def is_respawn_move(move: Move) -> bool:
@@ -302,63 +386,28 @@ def apply_move(state: State, move: Move) -> State:
     else:
         side = piece.side
         enemy = state.enemy(side)
-        d_row = state.forward_dir(side)
-        target = (to_row, to_col)
-
-        def build_path(
-            board: List[List[Optional[Piece]]],
-            pos: Coord,
-            path: List[Coord],
-        ) -> Optional[List[Coord]]:
-            if pos == target and path:
-                return path
-
-            row, col = pos
-            middle_row = row + d_row
-            middle_col = col
-            landing_row = row + 2 * d_row
-            landing_col = col
-            if not in_bounds(middle_row, middle_col) or not in_bounds(landing_row, landing_col):
-                return None
-
-            middle = board[middle_row][middle_col]
-            landing = board[landing_row][landing_col]
-            if middle is None or middle.kind != PAWN:
-                return None
-            if landing is not None and landing.kind == KNIGHT:
-                return None
-            if landing is not None and landing.side == side:
-                return None
-
-            next_board = [[board[r][c] for c in range(COLS)] for r in range(ROWS)]
-            knight = next_board[row][col]
-            next_board[row][col] = None
-            if landing is not None and landing.side == enemy and landing.kind == PAWN:
-                next_board[landing_row][landing_col] = None
-            next_board[landing_row][landing_col] = knight
-
-            result = build_path(next_board, (landing_row, landing_col), path + [(landing_row, landing_col)])
-            if result is not None:
-                return result
-            return None
-
-        path = build_path(next_state.board, (from_row, from_col), [])
+        path = reconstruct_knight_path(next_state, move)
         if path is None:
             raise ValueError(f"Could not reconstruct knight path for move {move}")
 
         current_row, current_col = from_row, from_col
+        moving_piece = piece
+        scored_this_move = False
         for next_row, next_col in path:
             landing = next_state.board[next_row][next_col]
             next_state.board[current_row][current_col] = None
             if landing is not None and landing.side == enemy and landing.kind == PAWN:
                 next_state.board[next_row][next_col] = None
-            next_state.board[next_row][next_col] = piece
+            if not moving_piece.scored and row_is_home_or_beyond(next_row, moving_piece.side, state.variant):
+                moving_piece = Piece(moving_piece.side, moving_piece.kind, True)
+                scored_this_move = True
+            next_state.board[next_row][next_col] = moving_piece
             current_row, current_col = next_row, next_col
 
-    if piece.kind == KNIGHT:
-        if piece.side == WHITE and from_row != next_state.target_row(WHITE) and to_row == next_state.target_row(WHITE):
+    if piece.kind == KNIGHT and scored_this_move:
+        if piece.side == WHITE:
             next_state.white_knights_home += 1
-        if piece.side == BLACK and from_row != next_state.target_row(BLACK) and to_row == next_state.target_row(BLACK):
+        if piece.side == BLACK:
             next_state.black_knights_home += 1
 
     next_state.side_to_move = state.enemy(state.side_to_move)
@@ -368,9 +417,9 @@ def apply_move(state: State, move: Move) -> State:
 def immediate_scoring_moves(state: State) -> List[Move]:
     scoring: List[Move] = []
     for move in get_legal_moves(state):
-        (from_row, from_col), (to_row, _to_col) = move
+        (from_row, from_col), (_to_row, _to_col) = move
         piece = state.board[from_row][from_col]
-        if piece is not None and piece.kind == KNIGHT and to_row == state.target_row(piece.side):
+        if piece is not None and piece.kind == KNIGHT and not piece.scored and knight_move_reaches_home(state, move):
             scoring.append(move)
     return scoring
 
@@ -400,14 +449,15 @@ def evaluate(state: State, side: str) -> float:
     enemy = state.enemy(side)
     my_home = state.white_knights_home if side == WHITE else state.black_knights_home
     opp_home = state.black_knights_home if side == WHITE else state.white_knights_home
-    score = 520 * (my_home - opp_home)
+    score = 900 * (my_home - opp_home)
 
     my_pawns = len(state.locate(side, PAWN))
-    my_knights = len(state.locate(side, KNIGHT))
     opp_pawns = len(state.locate(enemy, PAWN))
-    opp_knights = len(state.locate(enemy, KNIGHT))
-    score += 28 * (my_pawns - opp_pawns)
-    score += 280 * (my_knights - opp_knights)
+    my_scored_knights, my_unscored_knights = state.knight_counts(side)
+    opp_scored_knights, opp_unscored_knights = state.knight_counts(enemy)
+    score += 70 * (my_pawns - opp_pawns)
+    score += 260 * (my_unscored_knights - opp_unscored_knights)
+    score += 55 * (my_scored_knights - opp_scored_knights)
 
     my_mobility_state = state.clone()
     my_mobility_state.side_to_move = side
@@ -417,32 +467,42 @@ def evaluate(state: State, side: str) -> float:
 
     my_threats = len(immediate_scoring_moves(my_mobility_state))
     opp_threats = len(immediate_scoring_moves(opp_mobility_state))
-    score += 120 * my_threats
-    score -= 380 * opp_threats
+    score += 180 * my_threats
+    score -= 520 * opp_threats
 
     my_knight_targets = threatened_targets(state, enemy, KNIGHT)
     opp_knight_targets = threatened_targets(state, side, KNIGHT)
-    score -= 240 * len(my_knight_targets)
-    score += 140 * len(opp_knight_targets)
+    my_scored_threats = sum(1 for row, col in my_knight_targets if state.board[row][col].scored)
+    my_unscored_threats = len(my_knight_targets) - my_scored_threats
+    opp_scored_threats = sum(1 for row, col in opp_knight_targets if state.board[row][col].scored)
+    opp_unscored_threats = len(opp_knight_targets) - opp_scored_threats
+    score -= 320 * my_unscored_threats
+    score -= 60 * my_scored_threats
+    score += 190 * opp_unscored_threats
+    score += 25 * opp_scored_threats
 
     my_pawn_targets = threatened_targets(state, enemy, PAWN)
     opp_pawn_targets = threatened_targets(state, side, PAWN)
     score -= 24 * len(my_pawn_targets)
     score += 18 * len(opp_pawn_targets)
 
-    if my_knights == 1:
-        score -= 220
-    if opp_knights == 1:
-        score += 150
+    if my_scored_knights + my_unscored_knights == 1:
+        score -= 280
+    if opp_scored_knights + opp_unscored_knights == 1:
+        score += 170
 
     my_target_row = state.target_row(side)
     opp_target_row = state.target_row(enemy)
     for row, col in state.locate(side, KNIGHT):
-        score += 14 * (ROWS - abs(my_target_row - row))
-        score += 5 * (2 - abs(2 - col))
+        piece = state.board[row][col]
+        if not piece.scored:
+            score += 28 * (ROWS - abs(my_target_row - row))
+            score += 8 * (2 - abs(2 - col))
     for row, col in state.locate(enemy, KNIGHT):
-        score -= 14 * (ROWS - abs(opp_target_row - row))
-        score -= 5 * (2 - abs(2 - col))
+        piece = state.board[row][col]
+        if not piece.scored:
+            score -= 28 * (ROWS - abs(opp_target_row - row))
+            score -= 8 * (2 - abs(2 - col))
 
     for row, _col in state.locate(side, PAWN):
         score += 3 * (ROWS - abs(my_target_row - row))
@@ -531,14 +591,16 @@ def _root_tactical_adjustment(state: State, side: str) -> float:
 
     enemy_scoring = len(immediate_scoring_moves(enemy_probe))
     my_scoring = len(immediate_scoring_moves(my_probe))
-    my_knight_targets = len(threatened_targets(state, enemy, KNIGHT))
-    opp_knight_targets = len(threatened_targets(state, side, KNIGHT))
+    my_knight_targets = threatened_targets(state, enemy, KNIGHT)
+    opp_knight_targets = threatened_targets(state, side, KNIGHT)
 
     adjustment = 0.0
     adjustment += 140 * my_scoring
     adjustment -= 520 * enemy_scoring
-    adjustment -= 260 * my_knight_targets
-    adjustment += 140 * opp_knight_targets
+    for row, col in my_knight_targets:
+        adjustment -= 60 if state.board[row][col].scored else 300
+    for row, col in opp_knight_targets:
+        adjustment += 20 if state.board[row][col].scored else 180
 
     my_knights = state.live_knights(side)
     opp_knights = state.live_knights(enemy)
@@ -554,14 +616,14 @@ def _move_priority(state: State, move: Move) -> int:
     piece = state.board[from_row][from_col]
     target = state.board[to_row][to_col]
     priority = 0
-    if piece is not None and piece.kind == KNIGHT and to_row == state.target_row(piece.side):
+    if piece is not None and piece.kind == KNIGHT and knight_move_reaches_home(state, move):
         priority += 1000
-    if piece is not None and piece.kind == KNIGHT:
+    if piece is not None and piece.kind == KNIGHT and not piece.scored:
         priority += 80
     if target is not None:
         priority += 100
         if target.kind == KNIGHT:
-            priority += 180
+            priority += 25 if target.scored else 180
     return priority
 
 
