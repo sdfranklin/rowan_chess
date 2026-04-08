@@ -11,12 +11,14 @@ from typing import Optional
 from magnet_knights_logic import (
     AI_PROFILES,
     BLACK,
+    ENGINE_BRUTE,
     Move,
     VARIANT_RESPAWN,
     VARIANT_STANDARD,
     agent_move,
     apply_move,
     difficulty_names,
+    engine_names,
     default_state,
     get_legal_moves,
     move_to_str,
@@ -49,6 +51,7 @@ def play_text_game(
     agent_side: str = BLACK,
     depth: Optional[int] = None,
     difficulty: str = "medium",
+    engine: str = ENGINE_BRUTE,
     variant: str = VARIANT_STANDARD,
 ) -> int:
     state = default_state(variant=variant)
@@ -62,7 +65,7 @@ def play_text_game(
             break
 
         if state.side_to_move == agent_side:
-            move = agent_move(state, depth=depth, difficulty=difficulty)
+            move = agent_move(state, depth=depth, difficulty=difficulty, engine=engine)
             print(f"Agent plays: {move_to_str(move)}")
             state = apply_move(state, move)
             continue
@@ -111,6 +114,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     )
     parser.add_argument("--agent-side", default=BLACK, help="Agent side: W or B.")
     parser.add_argument("--difficulty", choices=difficulty_names(), default="medium", help="AI difficulty level.")
+    parser.add_argument("--engine", choices=engine_names(), default=ENGINE_BRUTE, help="AI engine: brute or race.")
     parser.add_argument("--depth", type=int, default=None, help="Optional search-depth override for the agent.")
     parser.add_argument(
         "--variant",
@@ -128,7 +132,13 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     try:
         if args.text:
-            return play_text_game(agent_side=agent_side, depth=args.depth, difficulty=args.difficulty, variant=args.variant)
+            return play_text_game(
+                agent_side=agent_side,
+                depth=args.depth,
+                difficulty=args.difficulty,
+                engine=args.engine,
+                variant=args.variant,
+            )
         ensure_gui_interpreter()
         from magnet_knights_gui import play_pygame_gui
 

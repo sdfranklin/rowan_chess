@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import random
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 ROWS = 7
 COLS = 5
@@ -36,6 +36,13 @@ AI_PROFILES: Dict[str, DifficultyProfile] = {
     "easy": DifficultyProfile(name="easy", depth=2, randomness=0.35, top_k=3),
     "medium": DifficultyProfile(name="medium", depth=4, randomness=0.12, top_k=2),
     "hard": DifficultyProfile(name="hard", depth=5, randomness=0.0, top_k=1),
+}
+
+ENGINE_BRUTE = "brute"
+ENGINE_RACE = "race"
+AI_ENGINES: Dict[str, str] = {
+    ENGINE_BRUTE: "Brute",
+    ENGINE_RACE: "Race",
 }
 
 
@@ -375,6 +382,23 @@ def immediate_scoring_moves(state: State) -> List[Move]:
     return scoring
 
 
+def is_knight_home(state: State, coord: Coord) -> bool:
+    row, col = coord
+    piece = state.board[row][col]
+    if piece is None or piece.kind != KNIGHT:
+        return False
+    home_row = state.target_row(piece.side)
+    return row >= home_row if piece.side == WHITE else row <= home_row
+
+
+def count_home_knights_on_board(state: State, side: str) -> int:
+    return sum(1 for coord in state.locate(side, KNIGHT) if is_knight_home(state, coord))
+
+
+def count_unscored_knights(state: State, side: str) -> int:
+    return state.live_knights(side) - count_home_knights_on_board(state, side)
+
+
 def threatened_targets(state: State, by_side: str, kind: Optional[str] = None) -> List[Coord]:
     probe = state.clone()
     probe.side_to_move = by_side
@@ -447,13 +471,150 @@ def evaluate(state: State, side: str) -> float:
     return float(score)
 
 
-def minimax(
+def jump_ready_knights(state: State, side: str) -> int:
+    probe = state.clone()
+    probe.side_to_move = side
+    count = 0
+    for coord in state.locate(side, KNIGHT):
+        if is_knight_home(state, coord):
+            continue
+        if get_legal_moves_from(probe, coord):
+            count += 1
+    return count
+
+
+def bridge_pawns(state: State, side: str) -> int:
+    d_row = state.forward_dir(side)
+    count = 0
+    for row, col in state.locate(side, KNIGHT):
+        if is_knight_home(state, (row, col)):
+            continue
+        middle_row = row + d_row
+        if not in_bounds(middle_row, col):
+            continue
+        middle = state.board[middle_row][col]
+        if middle is not None and middle.kind == PAWN:
+            count += 1
+    return count
+
+
+def turns_bonus(turns: float) -> int:
+    if turns == 1:
+        return 520
+    if turns == 2:
+        return 210
+    if turns == 3:
+        return 70
+    return 0
+
+
+def turns_to_score(
+    state: State,
+    side: str,
+    max_turns: int = 3,
+    branch_limit: int = 6,
+    memo: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float]] = None,
+) -> float:
+    if memo is None:
+        memo = {}
+    probe = state.clone()
+    probe.side_to_move = side
+    cache_key = board_key(probe) + (side, max_turns, "solo")
+    if cache_key in memo:
+        return memo[cache_key]
+
+    if immediate_scoring_moves(probe):
+        memo[cache_key] = 1
+        return 1
+    if max_turns <= 1:
+        memo[cache_key] = math.inf
+        return math.inf
+
+    legal = get_legal_moves(probe)
+    if not legal:
+        memo[cache_key] = math.inf
+        return math.inf
+
+    ordered = sorted(legal, key=lambda move: _race_move_priority(probe, move), reverse=True)[:branch_limit]
+    best = math.inf
+    for move in ordered:
+        child = apply_move(probe, move)
+        child.side_to_move = side
+        candidate = turns_to_score(child, side, max_turns - 1, branch_limit, memo)
+        if candidate != math.inf:
+            best = min(best, 1 + candidate)
+    memo[cache_key] = best
+    return best
+
+
+def evaluate_race(state: State, side: str) -> float:
+    winner = state.winner()
+    if winner == side:
+        return 1e6
+    if winner == state.enemy(side):
+        return -1e6
+
+    enemy = state.enemy(side)
+    my_home = state.white_knights_home if side == WHITE else state.black_knights_home
+    opp_home = state.black_knights_home if side == WHITE else state.white_knights_home
+    my_home_live = count_home_knights_on_board(state, side)
+    opp_home_live = count_home_knights_on_board(state, enemy)
+    my_unscored_knights = count_unscored_knights(state, side)
+    opp_unscored_knights = count_unscored_knights(state, enemy)
+    my_pawns = len(state.locate(side, PAWN))
+    opp_pawns = len(state.locate(enemy, PAWN))
+
+    score = 980 * (my_home - opp_home)
+    score += 280 * (my_unscored_knights - opp_unscored_knights)
+    score += 45 * (my_home_live - opp_home_live)
+    score += 38 * (my_pawns - opp_pawns)
+
+    my_probe = state.clone()
+    my_probe.side_to_move = side
+    opp_probe = state.clone()
+    opp_probe.side_to_move = enemy
+    my_immediate = len(immediate_scoring_moves(my_probe))
+    opp_immediate = len(immediate_scoring_moves(opp_probe))
+    score += 560 * my_immediate
+    score -= 820 * opp_immediate
+
+    score += 26 * (jump_ready_knights(state, side) - jump_ready_knights(state, enemy))
+    score += 14 * (bridge_pawns(state, side) - bridge_pawns(state, enemy))
+
+    my_knight_targets = threatened_targets(state, enemy, KNIGHT)
+    opp_knight_targets = threatened_targets(state, side, KNIGHT)
+    for coord in my_knight_targets:
+        score -= 40 if is_knight_home(state, coord) else 240
+    for coord in opp_knight_targets:
+        score += 12 if is_knight_home(state, coord) else 150
+
+    my_target_row = state.target_row(side)
+    opp_target_row = state.target_row(enemy)
+    for row, col in state.locate(side, KNIGHT):
+        if is_knight_home(state, (row, col)):
+            continue
+        score += 28 * (ROWS - abs(my_target_row - row))
+        score += 7 * (2 - abs(2 - col))
+    for row, col in state.locate(enemy, KNIGHT):
+        if is_knight_home(state, (row, col)):
+            continue
+        score -= 28 * (ROWS - abs(opp_target_row - row))
+        score -= 7 * (2 - abs(2 - col))
+
+    score += 2 * (len(get_legal_moves(my_probe)) - len(get_legal_moves(opp_probe)))
+    return float(score)
+
+
+def _minimax_with_policy(
     state: State,
     depth: int,
     alpha: float,
     beta: float,
     maximizing_for: str,
-    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float]] = None,
+    evaluate_fn: Callable[[State, str], float],
+    priority_fn: Callable[[State, Move], int],
+    cache_prefix: str,
+    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
     if table is None:
         table = {}
@@ -461,15 +622,15 @@ def minimax(
     winner = state.winner()
     moves = get_legal_moves(state)
     if depth == 0 or winner is not None or not moves:
-        return evaluate(state, maximizing_for), None
+        return evaluate_fn(state, maximizing_for), None
 
-    cache_key = board_key(state) + (depth, maximizing_for)
+    cache_key = board_key(state) + (depth, maximizing_for, cache_prefix)
     if cache_key in table:
         return table[cache_key], None
 
     ordered_moves = sorted(
         moves,
-        key=lambda move: _move_priority(state, move),
+        key=lambda move: priority_fn(state, move),
         reverse=True,
     )
     best_move: Optional[Move] = None
@@ -479,7 +640,17 @@ def minimax(
         value = -math.inf
         for move in ordered_moves:
             child = apply_move(state, move)
-            child_value, _unused = minimax(child, depth - 1, alpha, beta, maximizing_for, table)
+            child_value, _unused = _minimax_with_policy(
+                child,
+                depth - 1,
+                alpha,
+                beta,
+                maximizing_for,
+                evaluate_fn,
+                priority_fn,
+                cache_prefix,
+                table,
+            )
             if child_value > value:
                 value = child_value
                 best_move = move
@@ -492,7 +663,17 @@ def minimax(
     value = math.inf
     for move in ordered_moves:
         child = apply_move(state, move)
-        child_value, _unused = minimax(child, depth - 1, alpha, beta, maximizing_for, table)
+        child_value, _unused = _minimax_with_policy(
+            child,
+            depth - 1,
+            alpha,
+            beta,
+            maximizing_for,
+            evaluate_fn,
+            priority_fn,
+            cache_prefix,
+            table,
+        )
         if child_value < value:
             value = child_value
             best_move = move
@@ -503,7 +684,31 @@ def minimax(
     return value, best_move
 
 
+def minimax(
+    state: State,
+    depth: int,
+    alpha: float,
+    beta: float,
+    maximizing_for: str,
+    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
+) -> Tuple[float, Optional[Move]]:
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate, _move_priority, ENGINE_BRUTE, table)
+
+
+def minimax_race(
+    state: State,
+    depth: int,
+    alpha: float,
+    beta: float,
+    maximizing_for: str,
+    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
+) -> Tuple[float, Optional[Move]]:
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_race, _race_move_priority, ENGINE_RACE, table)
+
+
 def _move_priority(state: State, move: Move) -> int:
+    if is_respawn_move(move):
+        return 35
     (from_row, from_col), (to_row, to_col) = move
     piece = state.board[from_row][from_col]
     target = state.board[to_row][to_col]
@@ -519,6 +724,34 @@ def _move_priority(state: State, move: Move) -> int:
     return priority
 
 
+def _race_move_priority(state: State, move: Move) -> int:
+    priority = _move_priority(state, move)
+    side = state.side_to_move
+    enemy = state.enemy(side)
+    child = apply_move(state, move)
+    if child.winner() == side:
+        return priority + 5000
+
+    my_probe = child.clone()
+    my_probe.side_to_move = side
+    opp_probe = child.clone()
+    opp_probe.side_to_move = enemy
+    priority += 420 * len(immediate_scoring_moves(my_probe))
+    priority -= 1000 * len(immediate_scoring_moves(opp_probe))
+
+    if not is_respawn_move(move):
+        _start, destination = move
+        target = state.board[destination[0]][destination[1]]
+        piece = state.board[move[0][0]][move[0][1]]
+        if target is not None and target.kind == KNIGHT:
+            priority += 30 if is_knight_home(state, destination) else 170
+        if piece is not None and piece.kind == KNIGHT:
+            threatened = any(coord == destination for coord in threatened_targets(child, enemy, KNIGHT))
+            if threatened:
+                priority -= 25 if is_knight_home(child, destination) else 220
+    return priority
+
+
 def normalize_difficulty(difficulty: str) -> str:
     normalized = difficulty.strip().lower()
     if normalized not in AI_PROFILES:
@@ -530,8 +763,34 @@ def difficulty_names() -> Tuple[str, ...]:
     return tuple(AI_PROFILES.keys())
 
 
-def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "medium") -> Move:
-    difficulty = normalize_difficulty(difficulty)
+def normalize_engine(engine: str) -> str:
+    normalized = engine.strip().lower()
+    if normalized not in AI_ENGINES:
+        raise ValueError(f"engine must be one of: {', '.join(sorted(AI_ENGINES))}")
+    return normalized
+
+
+def engine_names() -> Tuple[str, ...]:
+    return tuple(AI_ENGINES.keys())
+
+
+def _race_root_adjustment(state: State, side: str) -> float:
+    enemy = state.enemy(side)
+    my_probe = state.clone()
+    my_probe.side_to_move = side
+    opp_probe = state.clone()
+    opp_probe.side_to_move = enemy
+
+    score = 260.0 * len(immediate_scoring_moves(my_probe))
+    score -= 980.0 * len(immediate_scoring_moves(opp_probe))
+    for coord in threatened_targets(state, enemy, KNIGHT):
+        score -= 40.0 if is_knight_home(state, coord) else 260.0
+    for coord in threatened_targets(state, side, KNIGHT):
+        score += 10.0 if is_knight_home(state, coord) else 140.0
+    return score
+
+
+def _brute_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
     profile = AI_PROFILES[difficulty]
     search_depth = depth if depth is not None else profile.depth
 
@@ -543,7 +802,7 @@ def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "med
     if not legal:
         raise ValueError("No legal move available")
 
-    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float] = {}
+    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float] = {}
     ranked: List[Tuple[float, Move]] = []
     for move in legal:
         child = apply_move(state, move)
@@ -559,6 +818,45 @@ def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "med
     if profile.randomness > 0.0 and len(candidate_pool) > 1 and random.random() < profile.randomness:
         return random.choice(candidate_pool)
     return ranked[0][1]
+
+
+def _race_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
+    profile = AI_PROFILES[difficulty]
+    search_depth = max(1, (depth if depth is not None else profile.depth) - 1)
+
+    legal = get_legal_moves(state)
+    if not legal:
+        raise ValueError("No legal move available")
+
+    winning_moves = [move for move in legal if apply_move(state, move).winner() == state.side_to_move]
+    if winning_moves:
+        return max(winning_moves, key=lambda move: _race_move_priority(state, move))
+
+    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float] = {}
+    ranked: List[Tuple[float, Move]] = []
+    for move in sorted(legal, key=lambda candidate: _race_move_priority(state, candidate), reverse=True):
+        child = apply_move(state, move)
+        score, _unused = minimax_race(child, search_depth - 1, -math.inf, math.inf, state.side_to_move, table)
+        score += _race_root_adjustment(child, state.side_to_move)
+        ranked.append((score, move))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    best_score = ranked[0][0]
+    candidate_pool = [move for score, move in ranked[: profile.top_k] if score >= best_score - 35]
+    if not candidate_pool:
+        candidate_pool = [ranked[0][1]]
+
+    if profile.randomness > 0.0 and len(candidate_pool) > 1 and random.random() < profile.randomness:
+        return random.choice(candidate_pool)
+    return ranked[0][1]
+
+
+def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "medium", engine: str = ENGINE_BRUTE) -> Move:
+    difficulty = normalize_difficulty(difficulty)
+    engine = normalize_engine(engine)
+    if engine == ENGINE_RACE:
+        return _race_agent_move(state, depth, difficulty)
+    return _brute_agent_move(state, depth, difficulty)
 
 
 def parse_move(text: str) -> Move:

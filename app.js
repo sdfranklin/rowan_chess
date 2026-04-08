@@ -1,4 +1,5 @@
 import {
+  AI_ENGINE_PROFILES,
   BLACK,
   COLS,
   DIFFICULTY_PROFILES,
@@ -42,6 +43,7 @@ const setupButton = document.getElementById("setup-button");
 const previewOptions = document.getElementById("preview-options");
 const modeChoiceRow = document.getElementById("mode-choice-row");
 const difficultyChoiceRow = document.getElementById("difficulty-choice-row");
+const engineChoiceRow = document.getElementById("engine-choice-row");
 const sideChoiceRow = document.getElementById("side-choice-row");
 const visualChoiceRow = document.getElementById("visual-choice-row");
 const rulesChoiceRow = document.getElementById("rules-choice-row");
@@ -56,6 +58,7 @@ const respawnButton = document.getElementById("respawn-button");
 const modeButton = document.getElementById("mode-button");
 const variantButton = document.getElementById("variant-button");
 const difficultyButton = document.getElementById("difficulty-button");
+const engineButton = document.getElementById("engine-button");
 const swapButton = document.getElementById("swap-button");
 const localPreviewMode = visualChoiceRow !== null || rulesChoiceRow !== null;
 
@@ -87,6 +90,7 @@ const app = {
   playMode: PLAY_MODE_AI,
   agentSide: BLACK,
   difficulty: "medium",
+  aiEngine: "brute",
   variant: VARIANT_STANDARD,
   visualStyle: localPreviewMode ? "simplified" : "classic",
   whiteGap: 2,
@@ -351,7 +355,7 @@ function maybeStartAi(now) {
     return;
   }
   if (app.aiDueAt && now >= app.aiDueAt && app.state.sideToMove === app.agentSide) {
-    const move = agentMove(app.state, app.difficulty);
+    const move = agentMove(app.state, app.difficulty, app.aiEngine);
     startMove(move);
     refreshUi();
   }
@@ -403,8 +407,9 @@ function refreshUi() {
   const modeLabel = app.playMode === PLAY_MODE_AI ? "Human vs AI" : "Hotseat";
   const depthLabel = DIFFICULTY_PROFILES[app.difficulty].depth;
   const variantLabel = app.variant === VARIANT_RESPAWN ? "Respawn" : "Standard";
+  const engineLabel = AI_ENGINE_PROFILES[app.aiEngine]?.title || "Brute";
   const rulesMeta = localPreviewMode ? ` | Rules: ${variantLabel}` : "";
-  metaText.textContent = `Mode: ${modeLabel}${rulesMeta} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (depth ${depthLabel}) | Turn: ${sideName(app.state.sideToMove)} | Bottom home: ${app.state.whiteKnightsHome} | Top home: ${app.state.blackKnightsHome}`;
+  metaText.textContent = `Mode: ${modeLabel}${rulesMeta} | Engine: ${engineLabel} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (depth ${depthLabel}) | Turn: ${sideName(app.state.sideToMove)} | Bottom home: ${app.state.whiteKnightsHome} | Top home: ${app.state.blackKnightsHome}`;
 
   modeButton.textContent = app.playMode === PLAY_MODE_AI ? "Mode: AI" : "Mode: 2P";
   if (variantButton) {
@@ -413,6 +418,10 @@ function refreshUi() {
   document.body.dataset.visualStyle = app.visualStyle;
   difficultyButton.textContent = `AI: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)}`;
   difficultyButton.disabled = app.playMode !== PLAY_MODE_AI;
+  if (engineButton) {
+    engineButton.textContent = `Engine: ${engineLabel}`;
+    engineButton.disabled = app.playMode !== PLAY_MODE_AI;
+  }
   swapButton.textContent = app.playMode === PLAY_MODE_AI ? `Computer: ${sideName(app.agentSide)}` : "Swap Side";
   swapButton.disabled = app.playMode !== PLAY_MODE_AI;
   restartButton.textContent = "Restart";
@@ -499,6 +508,9 @@ function renderSetupOverlay() {
   if (difficultyChoiceRow) {
     difficultyChoiceRow.replaceChildren();
   }
+  if (engineChoiceRow) {
+    engineChoiceRow.replaceChildren();
+  }
   if (sideChoiceRow) {
     sideChoiceRow.replaceChildren();
   }
@@ -531,6 +543,7 @@ function renderSetupOverlay() {
 
   renderModeChoices();
   renderDifficultyChoices();
+  renderEngineChoices();
   renderSideChoices();
   renderVisualChoices();
   renderRulesChoices();
@@ -647,6 +660,41 @@ function renderDifficultyChoices() {
     copy.textContent = option.copy;
     button.append(title, copy);
     difficultyChoiceRow.append(button);
+  }
+}
+
+function renderEngineChoices() {
+  if (!engineChoiceRow) {
+    return;
+  }
+  const options = Object.values(AI_ENGINE_PROFILES).map((profile) => ({
+    key: profile.key,
+    title: profile.title,
+    copy: profile.copy,
+  }));
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "visual-choice";
+    if (app.aiEngine === option.key) {
+      button.classList.add("active");
+    }
+    button.disabled = app.playMode !== PLAY_MODE_AI;
+    button.addEventListener("click", () => {
+      if (app.playMode !== PLAY_MODE_AI) {
+        return;
+      }
+      app.aiEngine = option.key;
+      refreshUi();
+    });
+    const title = document.createElement("span");
+    title.className = "visual-choice-title";
+    title.textContent = option.title;
+    const copy = document.createElement("p");
+    copy.className = "visual-choice-copy";
+    copy.textContent = option.copy;
+    button.append(title, copy);
+    engineChoiceRow.append(button);
   }
 }
 
@@ -1248,6 +1296,16 @@ function cycleDifficulty() {
   refreshUi();
 }
 
+function cycleEngine() {
+  if (app.playMode !== PLAY_MODE_AI) {
+    return;
+  }
+  const keys = Object.keys(AI_ENGINE_PROFILES);
+  const index = keys.indexOf(app.aiEngine);
+  app.aiEngine = keys[(index + 1) % keys.length];
+  refreshUi();
+}
+
 function toggleRespawnArmed() {
   if (!respawnButton) {
     return;
@@ -1290,6 +1348,9 @@ if (variantButton) {
   variantButton.addEventListener("click", toggleVariant);
 }
 difficultyButton.addEventListener("click", cycleDifficulty);
+if (engineButton) {
+  engineButton.addEventListener("click", cycleEngine);
+}
 swapButton.addEventListener("click", swapAgentSide);
 if (respawnButton) {
   respawnButton.addEventListener("click", toggleRespawnArmed);
@@ -1308,6 +1369,8 @@ window.addEventListener("keydown", (event) => {
     toggleMode();
   } else if (event.key === "d" || event.key === "D") {
     cycleDifficulty();
+  } else if (event.key === "e" || event.key === "E") {
+    cycleEngine();
   } else if ((event.key === "s" || event.key === "S") && app.playMode === PLAY_MODE_AI) {
     swapAgentSide();
   } else if (app.setupMode && event.key === "Enter") {
