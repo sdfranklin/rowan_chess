@@ -34,8 +34,8 @@ class DifficultyProfile:
 
 AI_PROFILES: Dict[str, DifficultyProfile] = {
     "easy": DifficultyProfile(name="easy", depth=2, randomness=0.25, top_k=2),
-    "medium": DifficultyProfile(name="medium", depth=4, randomness=0.05, top_k=2),
-    "hard": DifficultyProfile(name="hard", depth=5, randomness=0.0, top_k=1),
+    "medium": DifficultyProfile(name="medium", depth=3, randomness=0.05, top_k=2),
+    "hard": DifficultyProfile(name="hard", depth=4, randomness=0.0, top_k=1),
 }
 
 
@@ -390,16 +390,6 @@ def threatened_targets(state: State, by_side: str, kind: Optional[str] = None) -
     return sorted(threatened)
 
 
-def is_tactical_position(state: State) -> bool:
-    sides = (state.side_to_move, state.enemy(state.side_to_move))
-    for side in sides:
-        probe = state.clone()
-        probe.side_to_move = side
-        if immediate_scoring_moves(probe):
-            return True
-    return bool(threatened_targets(state, WHITE, KNIGHT) or threatened_targets(state, BLACK, KNIGHT))
-
-
 def evaluate(state: State, side: str) -> float:
     winner = state.winner()
     if winner == side:
@@ -427,13 +417,13 @@ def evaluate(state: State, side: str) -> float:
 
     my_threats = len(immediate_scoring_moves(my_mobility_state))
     opp_threats = len(immediate_scoring_moves(opp_mobility_state))
-    score += 150 * my_threats
-    score -= 260 * opp_threats
+    score += 120 * my_threats
+    score -= 380 * opp_threats
 
     my_knight_targets = threatened_targets(state, enemy, KNIGHT)
     opp_knight_targets = threatened_targets(state, side, KNIGHT)
-    score -= 170 * len(my_knight_targets)
-    score += 130 * len(opp_knight_targets)
+    score -= 240 * len(my_knight_targets)
+    score += 140 * len(opp_knight_targets)
 
     my_pawn_targets = threatened_targets(state, enemy, PAWN)
     opp_pawn_targets = threatened_targets(state, side, PAWN)
@@ -441,9 +431,9 @@ def evaluate(state: State, side: str) -> float:
     score += 18 * len(opp_pawn_targets)
 
     if my_knights == 1:
-        score -= 140
+        score -= 220
     if opp_knights == 1:
-        score += 120
+        score += 150
 
     my_target_row = state.target_row(side)
     opp_target_row = state.target_row(enemy)
@@ -468,25 +458,17 @@ def minimax(
     alpha: float,
     beta: float,
     maximizing_for: str,
-    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, int, str], float]] = None,
-    extensions_remaining: int = 1,
+    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
     if table is None:
         table = {}
 
     winner = state.winner()
     moves = get_legal_moves(state)
-    if winner is not None or not moves:
+    if depth == 0 or winner is not None or not moves:
         return evaluate(state, maximizing_for), None
 
-    if depth <= 0:
-        # Extend volatile leaf nodes so the engine sees one more reply in tactical races.
-        if extensions_remaining <= 0 or not is_tactical_position(state):
-            return evaluate(state, maximizing_for), None
-        depth = 1
-        extensions_remaining -= 1
-
-    cache_key = board_key(state) + (depth, extensions_remaining, maximizing_for)
+    cache_key = board_key(state) + (depth, maximizing_for)
     if cache_key in table:
         return table[cache_key], None
 
@@ -509,7 +491,6 @@ def minimax(
                 beta,
                 maximizing_for,
                 table,
-                extensions_remaining,
             )
             if child_value > value:
                 value = child_value
@@ -530,7 +511,6 @@ def minimax(
             beta,
             maximizing_for,
             table,
-            extensions_remaining,
         )
         if child_value < value:
             value = child_value
@@ -540,6 +520,33 @@ def minimax(
             break
     table[cache_key] = value
     return value, best_move
+
+
+def _root_tactical_adjustment(state: State, side: str) -> float:
+    enemy = state.enemy(side)
+    enemy_probe = state.clone()
+    enemy_probe.side_to_move = enemy
+    my_probe = state.clone()
+    my_probe.side_to_move = side
+
+    enemy_scoring = len(immediate_scoring_moves(enemy_probe))
+    my_scoring = len(immediate_scoring_moves(my_probe))
+    my_knight_targets = len(threatened_targets(state, enemy, KNIGHT))
+    opp_knight_targets = len(threatened_targets(state, side, KNIGHT))
+
+    adjustment = 0.0
+    adjustment += 140 * my_scoring
+    adjustment -= 520 * enemy_scoring
+    adjustment -= 260 * my_knight_targets
+    adjustment += 140 * opp_knight_targets
+
+    my_knights = state.live_knights(side)
+    opp_knights = state.live_knights(enemy)
+    if my_knights == 1 and my_knight_targets:
+        adjustment -= 420
+    if opp_knights == 1 and opp_knight_targets:
+        adjustment += 220
+    return adjustment
 
 
 def _move_priority(state: State, move: Move) -> int:
@@ -578,7 +585,7 @@ def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "med
     if not legal:
         raise ValueError("No legal move available")
 
-    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, int, str], float] = {}
+    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float] = {}
     ranked: List[Tuple[float, Move]] = []
     for move in sorted(legal, key=lambda move: _move_priority(state, move), reverse=True):
         child = apply_move(state, move)
@@ -589,8 +596,8 @@ def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "med
             math.inf,
             state.side_to_move,
             table,
-            1,
         )
+        score += _root_tactical_adjustment(child, state.side_to_move)
         ranked.append((score, move))
 
     ranked.sort(key=lambda item: item[0], reverse=True)

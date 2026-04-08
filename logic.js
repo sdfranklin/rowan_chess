@@ -13,8 +13,8 @@ export const RESPAWN_ORIGIN_ROW = -1;
 
 export const DIFFICULTY_PROFILES = {
   easy: { name: "easy", depth: 2, randomness: 0.25, topK: 2 },
-  medium: { name: "medium", depth: 4, randomness: 0.05, topK: 2 },
-  hard: { name: "hard", depth: 5, randomness: 0.0, topK: 1 },
+  medium: { name: "medium", depth: 3, randomness: 0.05, topK: 2 },
+  hard: { name: "hard", depth: 4, randomness: 0.0, topK: 1 },
 };
 
 export function sideName(side) {
@@ -440,18 +440,6 @@ function threatenedTargets(state, bySide, kind = null) {
   return [...threatened.values()];
 }
 
-function isTacticalPosition(state) {
-  const sides = [state.sideToMove, enemyOf(state.sideToMove)];
-  for (const side of sides) {
-    const probe = cloneState(state);
-    probe.sideToMove = side;
-    if (immediateScoringMoves(probe).length > 0) {
-      return true;
-    }
-  }
-  return threatenedTargets(state, WHITE, KNIGHT).length > 0 || threatenedTargets(state, BLACK, KNIGHT).length > 0;
-}
-
 function evaluate(state, side) {
   const won = winner(state);
   if (won === side) {
@@ -479,19 +467,19 @@ function evaluate(state, side) {
   oppMobilityState.sideToMove = enemy;
   score += 3 * (getLegalMoves(myMobilityState).length - getLegalMoves(oppMobilityState).length);
 
-  score += 150 * immediateScoringMoves(myMobilityState).length;
-  score -= 260 * immediateScoringMoves(oppMobilityState).length;
+  score += 120 * immediateScoringMoves(myMobilityState).length;
+  score -= 380 * immediateScoringMoves(oppMobilityState).length;
 
-  score -= 170 * threatenedTargets(state, enemy, KNIGHT).length;
-  score += 130 * threatenedTargets(state, side, KNIGHT).length;
+  score -= 240 * threatenedTargets(state, enemy, KNIGHT).length;
+  score += 140 * threatenedTargets(state, side, KNIGHT).length;
   score -= 24 * threatenedTargets(state, enemy, PAWN).length;
   score += 18 * threatenedTargets(state, side, PAWN).length;
 
   if (myKnights === 1) {
-    score -= 140;
+    score -= 220;
   }
   if (oppKnights === 1) {
-    score += 120;
+    score += 150;
   }
 
   const myTargetRow = targetRow(side, state.variant);
@@ -548,22 +536,14 @@ function movePriority(state, move) {
   return priority;
 }
 
-function minimax(state, depth, alpha, beta, maximizingFor, table = new Map(), extensionsRemaining = 1) {
+function minimax(state, depth, alpha, beta, maximizingFor, table = new Map()) {
   const won = winner(state);
   const moves = getLegalMoves(state);
-  if (won !== null || moves.length === 0) {
+  if (depth === 0 || won !== null || moves.length === 0) {
     return { score: evaluate(state, maximizingFor), move: null };
   }
 
-  if (depth <= 0) {
-    if (extensionsRemaining <= 0 || !isTacticalPosition(state)) {
-      return { score: evaluate(state, maximizingFor), move: null };
-    }
-    depth = 1;
-    extensionsRemaining -= 1;
-  }
-
-  const cacheKey = `${boardKey(state)}|${depth}|${extensionsRemaining}|${maximizingFor}`;
+  const cacheKey = `${boardKey(state)}|${depth}|${maximizingFor}`;
   if (table.has(cacheKey)) {
     return { score: table.get(cacheKey), move: null };
   }
@@ -576,7 +556,7 @@ function minimax(state, depth, alpha, beta, maximizingFor, table = new Map(), ex
     let value = -Infinity;
     for (const move of orderedMoves) {
       const child = applyMove(state, move);
-      const childScore = minimax(child, depth - 1, alpha, beta, maximizingFor, table, extensionsRemaining).score;
+      const childScore = minimax(child, depth - 1, alpha, beta, maximizingFor, table).score;
       if (childScore > value) {
         value = childScore;
         bestMove = move;
@@ -593,7 +573,7 @@ function minimax(state, depth, alpha, beta, maximizingFor, table = new Map(), ex
   let value = Infinity;
   for (const move of orderedMoves) {
     const child = applyMove(state, move);
-    const childScore = minimax(child, depth - 1, alpha, beta, maximizingFor, table, extensionsRemaining).score;
+    const childScore = minimax(child, depth - 1, alpha, beta, maximizingFor, table).score;
     if (childScore < value) {
       value = childScore;
       bestMove = move;
@@ -605,6 +585,35 @@ function minimax(state, depth, alpha, beta, maximizingFor, table = new Map(), ex
   }
   table.set(cacheKey, value);
   return { score: value, move: bestMove };
+}
+
+function rootTacticalAdjustment(state, side) {
+  const enemy = enemyOf(side);
+  const enemyProbe = cloneState(state);
+  enemyProbe.sideToMove = enemy;
+  const myProbe = cloneState(state);
+  myProbe.sideToMove = side;
+
+  const enemyScoring = immediateScoringMoves(enemyProbe).length;
+  const myScoring = immediateScoringMoves(myProbe).length;
+  const myKnightTargets = threatenedTargets(state, enemy, KNIGHT).length;
+  const oppKnightTargets = threatenedTargets(state, side, KNIGHT).length;
+
+  let adjustment = 0;
+  adjustment += 140 * myScoring;
+  adjustment -= 520 * enemyScoring;
+  adjustment -= 260 * myKnightTargets;
+  adjustment += 140 * oppKnightTargets;
+
+  const myKnights = locate(state, side, KNIGHT).length;
+  const oppKnights = locate(state, enemy, KNIGHT).length;
+  if (myKnights === 1 && myKnightTargets > 0) {
+    adjustment -= 420;
+  }
+  if (oppKnights === 1 && oppKnightTargets > 0) {
+    adjustment += 220;
+  }
+  return adjustment;
 }
 
 export function agentMove(state, difficulty = "medium") {
@@ -621,8 +630,8 @@ export function agentMove(state, difficulty = "medium") {
     .sort((a, b) => movePriority(state, b) - movePriority(state, a))
     .map((move) => {
       const child = applyMove(state, move);
-      const result = minimax(child, searchDepth - 1, -Infinity, Infinity, state.sideToMove, table, 1);
-      return { score: result.score, move };
+      const result = minimax(child, searchDepth - 1, -Infinity, Infinity, state.sideToMove, table);
+      return { score: result.score + rootTacticalAdjustment(child, state.sideToMove), move };
     });
 
   ranked.sort((a, b) => b.score - a.score);
