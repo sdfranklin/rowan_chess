@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import random
+from time import perf_counter
 from typing import Dict, List, Optional, Tuple
 
 ROWS = 7
@@ -27,15 +28,16 @@ Move = Tuple[Coord, Coord]
 @dataclass(frozen=True)
 class DifficultyProfile:
     name: str
-    depth: int
-    randomness: float
-    top_k: int
+    think_ms: int
+    rollout_depth: int
+    exploration: float
+    min_iterations: int
 
 
 AI_PROFILES: Dict[str, DifficultyProfile] = {
-    "easy": DifficultyProfile(name="easy", depth=2, randomness=0.25, top_k=2),
-    "medium": DifficultyProfile(name="medium", depth=3, randomness=0.05, top_k=2),
-    "hard": DifficultyProfile(name="hard", depth=4, randomness=0.0, top_k=1),
+    "easy": DifficultyProfile(name="easy", think_ms=70, rollout_depth=6, exploration=1.15, min_iterations=8),
+    "medium": DifficultyProfile(name="medium", think_ms=220, rollout_depth=8, exploration=1.25, min_iterations=24),
+    "hard": DifficultyProfile(name="hard", think_ms=700, rollout_depth=10, exploration=1.35, min_iterations=60),
 }
 
 
@@ -627,6 +629,179 @@ def _move_priority(state: State, move: Move) -> int:
     return priority
 
 
+def _heuristic_outcome(state: State, root_side: str) -> float:
+    winner = state.winner()
+    if winner == root_side:
+        return 1.0
+    if winner == state.enemy(root_side):
+        return -1.0
+    return math.tanh(evaluate(state, root_side) / 1400.0)
+
+
+def _rollout_move_score(state: State, move: Move) -> float:
+    side = state.side_to_move
+    enemy = state.enemy(side)
+    from_square, to_square = move
+    piece = state.board[from_square[0]][from_square[1]]
+    target = None if is_respawn_move(move) else state.board[to_square[0]][to_square[1]]
+    child = apply_move(state, move)
+    winner = child.winner()
+    if winner == side:
+        return 100000.0
+    if winner == enemy:
+        return -100000.0
+
+    score = 0.0
+    if piece is not None and piece.kind == KNIGHT and not piece.scored and knight_move_reaches_home(state, move):
+        score += 1800.0
+    if target is not None:
+        if target.kind == KNIGHT:
+            score += 25.0 if target.scored else 320.0
+        else:
+            score += 55.0
+
+    my_probe = child.clone()
+    my_probe.side_to_move = side
+    enemy_probe = child.clone()
+    enemy_probe.side_to_move = enemy
+    score += 240.0 * len(immediate_scoring_moves(my_probe))
+    score -= 950.0 * len(immediate_scoring_moves(enemy_probe))
+
+    if piece is not None and piece.kind == KNIGHT:
+        moved_piece = child.board[to_square[0]][to_square[1]]
+        if moved_piece is not None:
+            threatened = any(coord == to_square for coord in threatened_targets(child, enemy, KNIGHT))
+            if threatened:
+                score -= 45.0 if moved_piece.scored else 340.0
+            if piece.scored:
+                score -= 20.0
+    return score
+
+
+def _pick_rollout_move(state: State) -> Move:
+    legal = get_legal_moves(state)
+    if len(legal) == 1:
+        return legal[0]
+
+    ranked = sorted(
+        ((_rollout_move_score(state, move), move) for move in legal),
+        key=lambda item: item[0],
+        reverse=True,
+    )
+    top = [move for _score, move in ranked[: min(4, len(ranked))]]
+    weights = [1.0, 0.55, 0.28, 0.14][: len(top)]
+    return random.choices(top, weights=weights, k=1)[0]
+
+
+@dataclass
+class SearchNode:
+    state: State
+    parent: Optional["SearchNode"] = None
+    move: Optional[Move] = None
+    children: List["SearchNode"] = field(default_factory=list)
+    unexpanded_moves: Optional[List[Move]] = None
+    visits: int = 0
+    value_sum: float = 0.0
+
+
+def _initialize_node_moves(node: SearchNode) -> None:
+    if node.unexpanded_moves is not None:
+        return
+    node.unexpanded_moves = sorted(get_legal_moves(node.state), key=lambda move: _rollout_move_score(node.state, move), reverse=True)
+
+
+def _expand_node(node: SearchNode) -> SearchNode:
+    _initialize_node_moves(node)
+    if not node.unexpanded_moves:
+        return node
+    move = node.unexpanded_moves.pop(0)
+    child = SearchNode(state=apply_move(node.state, move), parent=node, move=move)
+    node.children.append(child)
+    return child
+
+
+def _select_child(node: SearchNode, root_side: str, exploration: float) -> SearchNode:
+    assert node.children
+    log_visits = math.log(max(1, node.visits))
+    best_child = node.children[0]
+    best_score = -math.inf
+    for child in node.children:
+        if child.visits == 0:
+            score = math.inf
+        else:
+            mean = child.value_sum / child.visits
+            perspective_score = mean if node.state.side_to_move == root_side else -mean
+            score = perspective_score + exploration * math.sqrt(log_visits / child.visits)
+        if score > best_score:
+            best_score = score
+            best_child = child
+    return best_child
+
+
+def _rollout(state: State, root_side: str, rollout_depth: int) -> float:
+    cursor = state
+    for _ply in range(rollout_depth):
+        winner = cursor.winner()
+        if winner is not None:
+            return 1.0 if winner == root_side else -1.0
+        if not get_legal_moves(cursor):
+            break
+        cursor = apply_move(cursor, _pick_rollout_move(cursor))
+    return _heuristic_outcome(cursor, root_side)
+
+
+def _winning_moves(state: State) -> List[Move]:
+    side = state.side_to_move
+    return [move for move in get_legal_moves(state) if apply_move(state, move).winner() == side]
+
+
+def _mcts_move(state: State, profile: DifficultyProfile, rollout_depth_override: Optional[int] = None) -> Move:
+    legal = get_legal_moves(state)
+    if not legal:
+        raise ValueError("No legal move available")
+    if len(legal) == 1:
+        return legal[0]
+
+    forced_wins = _winning_moves(state)
+    if forced_wins:
+        return max(forced_wins, key=lambda move: _rollout_move_score(state, move))
+
+    rollout_depth = max(4, rollout_depth_override if rollout_depth_override is not None else profile.rollout_depth)
+    root_side = state.side_to_move
+    root = SearchNode(state=state)
+    deadline = perf_counter() + (profile.think_ms / 1000.0)
+    iterations = 0
+
+    while iterations < profile.min_iterations or perf_counter() < deadline:
+        node = root
+        while node.state.winner() is None:
+            _initialize_node_moves(node)
+            if node.unexpanded_moves:
+                node = _expand_node(node)
+                break
+            if not node.children:
+                break
+            node = _select_child(node, root_side, profile.exploration)
+
+        result = _rollout(node.state, root_side, rollout_depth)
+        cursor: Optional[SearchNode] = node
+        while cursor is not None:
+            cursor.visits += 1
+            cursor.value_sum += result
+            cursor = cursor.parent
+        iterations += 1
+
+    if not root.children:
+        return max(legal, key=lambda move: _rollout_move_score(state, move))
+
+    best_child = max(
+        root.children,
+        key=lambda child: (child.visits, child.value_sum / max(1, child.visits)),
+    )
+    assert best_child.move is not None
+    return best_child.move
+
+
 def normalize_difficulty(difficulty: str) -> str:
     normalized = difficulty.strip().lower()
     if normalized not in AI_PROFILES:
@@ -641,36 +816,7 @@ def difficulty_names() -> Tuple[str, ...]:
 def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "medium") -> Move:
     difficulty = normalize_difficulty(difficulty)
     profile = AI_PROFILES[difficulty]
-    search_depth = max(1, depth if depth is not None else profile.depth)
-
-    legal = get_legal_moves(state)
-    if not legal:
-        raise ValueError("No legal move available")
-
-    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str], float] = {}
-    ranked: List[Tuple[float, Move]] = []
-    for move in sorted(legal, key=lambda move: _move_priority(state, move), reverse=True):
-        child = apply_move(state, move)
-        score, _unused = minimax(
-            child,
-            search_depth - 1,
-            -math.inf,
-            math.inf,
-            state.side_to_move,
-            table,
-        )
-        score += _root_tactical_adjustment(child, state.side_to_move)
-        ranked.append((score, move))
-
-    ranked.sort(key=lambda item: item[0], reverse=True)
-    best_score = ranked[0][0]
-    candidate_pool = [move for score, move in ranked[: profile.top_k] if score >= best_score - 20]
-    if not candidate_pool:
-        candidate_pool = [ranked[0][1]]
-
-    if profile.randomness > 0.0 and len(candidate_pool) > 1 and random.random() < profile.randomness:
-        return random.choice(candidate_pool)
-    return ranked[0][1]
+    return _mcts_move(state, profile, rollout_depth_override=depth)
 
 
 def parse_move(text: str) -> Move:

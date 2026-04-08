@@ -12,9 +12,9 @@ export const RESPAWN_ROW_FROM_SIDE = 2;
 export const RESPAWN_ORIGIN_ROW = -1;
 
 export const DIFFICULTY_PROFILES = {
-  easy: { name: "easy", depth: 2, randomness: 0.25, topK: 2 },
-  medium: { name: "medium", depth: 3, randomness: 0.05, topK: 2 },
-  hard: { name: "hard", depth: 4, randomness: 0.0, topK: 1 },
+  easy: { name: "easy", thinkMs: 70, rolloutDepth: 6, exploration: 1.15, minIterations: 8 },
+  medium: { name: "medium", thinkMs: 220, rolloutDepth: 8, exploration: 1.25, minIterations: 24 },
+  hard: { name: "hard", thinkMs: 700, rolloutDepth: 10, exploration: 1.35, minIterations: 60 },
 };
 
 export function sideName(side) {
@@ -584,6 +584,219 @@ function movePriority(state, move) {
   return priority;
 }
 
+function currentTimeMs() {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now();
+  }
+  return Date.now();
+}
+
+function heuristicOutcome(state, rootSide) {
+  const won = winner(state);
+  if (won === rootSide) {
+    return 1;
+  }
+  if (won === enemyOf(rootSide)) {
+    return -1;
+  }
+  return Math.tanh(evaluate(state, rootSide) / 1400);
+}
+
+function rolloutMoveScore(state, move) {
+  const side = state.sideToMove;
+  const enemy = enemyOf(side);
+  const piece = state.board[move.from[0]][move.from[1]];
+  const target = isRespawnMove(move) ? null : state.board[move.to[0]][move.to[1]];
+  const child = applyMove(state, move);
+  const won = winner(child);
+  if (won === side) {
+    return 100000;
+  }
+  if (won === enemy) {
+    return -100000;
+  }
+
+  let score = 0;
+  if (piece && piece.kind === KNIGHT && !piece.scored && knightMoveReachesHome(state, move)) {
+    score += 1800;
+  }
+  if (target) {
+    if (target.kind === KNIGHT) {
+      score += target.scored ? 25 : 320;
+    } else {
+      score += 55;
+    }
+  }
+
+  const myProbe = cloneState(child);
+  myProbe.sideToMove = side;
+  const enemyProbe = cloneState(child);
+  enemyProbe.sideToMove = enemy;
+  score += 240 * immediateScoringMoves(myProbe).length;
+  score -= 950 * immediateScoringMoves(enemyProbe).length;
+
+  if (piece && piece.kind === KNIGHT) {
+    const movedPiece = child.board[move.to[0]][move.to[1]];
+    if (movedPiece) {
+      const threatened = threatenedTargets(child, enemy, KNIGHT).some(
+        ([row, col]) => row === move.to[0] && col === move.to[1],
+      );
+      if (threatened) {
+        score -= movedPiece.scored ? 45 : 340;
+      }
+      if (piece.scored) {
+        score -= 20;
+      }
+    }
+  }
+  return score;
+}
+
+function pickRolloutMove(state) {
+  const legal = getLegalMoves(state);
+  if (legal.length === 1) {
+    return legal[0];
+  }
+
+  const ranked = legal
+    .map((move) => ({ move, score: rolloutMoveScore(state, move) }))
+    .sort((a, b) => b.score - a.score);
+  const top = ranked.slice(0, Math.min(4, ranked.length));
+  const weights = [1, 0.55, 0.28, 0.14].slice(0, top.length);
+  const total = weights.reduce((sum, value) => sum + value, 0);
+  let draw = Math.random() * total;
+  for (let index = 0; index < top.length; index += 1) {
+    draw -= weights[index];
+    if (draw <= 0) {
+      return top[index].move;
+    }
+  }
+  return top[0].move;
+}
+
+function createSearchNode(state, parent = null, move = null) {
+  return {
+    state,
+    parent,
+    move,
+    children: [],
+    unexpandedMoves: null,
+    visits: 0,
+    valueSum: 0,
+  };
+}
+
+function initializeNodeMoves(node) {
+  if (node.unexpandedMoves !== null) {
+    return;
+  }
+  node.unexpandedMoves = getLegalMoves(node.state).sort((a, b) => rolloutMoveScore(node.state, b) - rolloutMoveScore(node.state, a));
+}
+
+function expandNode(node) {
+  initializeNodeMoves(node);
+  if (!node.unexpandedMoves.length) {
+    return node;
+  }
+  const move = node.unexpandedMoves.shift();
+  const child = createSearchNode(applyMove(node.state, move), node, move);
+  node.children.push(child);
+  return child;
+}
+
+function selectChild(node, rootSide, exploration) {
+  let bestChild = node.children[0];
+  let bestScore = -Infinity;
+  const logVisits = Math.log(Math.max(1, node.visits));
+  for (const child of node.children) {
+    let score = Infinity;
+    if (child.visits > 0) {
+      const mean = child.valueSum / child.visits;
+      const perspectiveScore = node.state.sideToMove === rootSide ? mean : -mean;
+      score = perspectiveScore + exploration * Math.sqrt(logVisits / child.visits);
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestChild = child;
+    }
+  }
+  return bestChild;
+}
+
+function rollout(state, rootSide, rolloutDepth) {
+  let cursor = state;
+  for (let ply = 0; ply < rolloutDepth; ply += 1) {
+    const won = winner(cursor);
+    if (won !== null) {
+      return won === rootSide ? 1 : -1;
+    }
+    const legal = getLegalMoves(cursor);
+    if (legal.length === 0) {
+      break;
+    }
+    cursor = applyMove(cursor, pickRolloutMove(cursor));
+  }
+  return heuristicOutcome(cursor, rootSide);
+}
+
+function winningMoves(state) {
+  const side = state.sideToMove;
+  return getLegalMoves(state).filter((move) => winner(applyMove(state, move)) === side);
+}
+
+function mctsMove(state, profile) {
+  const legal = getLegalMoves(state);
+  if (legal.length === 0) {
+    throw new Error("No legal move available");
+  }
+  if (legal.length === 1) {
+    return legal[0];
+  }
+
+  const forcedWins = winningMoves(state);
+  if (forcedWins.length > 0) {
+    return forcedWins.sort((a, b) => rolloutMoveScore(state, b) - rolloutMoveScore(state, a))[0];
+  }
+
+  const rootSide = state.sideToMove;
+  const root = createSearchNode(state);
+  const deadline = currentTimeMs() + profile.thinkMs;
+  let iterations = 0;
+
+  while (iterations < profile.minIterations || currentTimeMs() < deadline) {
+    let node = root;
+    while (winner(node.state) === null) {
+      initializeNodeMoves(node);
+      if (node.unexpandedMoves.length > 0) {
+        node = expandNode(node);
+        break;
+      }
+      if (node.children.length === 0) {
+        break;
+      }
+      node = selectChild(node, rootSide, profile.exploration);
+    }
+
+    const result = rollout(node.state, rootSide, profile.rolloutDepth);
+    let cursor = node;
+    while (cursor) {
+      cursor.visits += 1;
+      cursor.valueSum += result;
+      cursor = cursor.parent;
+    }
+    iterations += 1;
+  }
+
+  return root.children
+    .slice()
+    .sort((a, b) => {
+      if (b.visits !== a.visits) {
+        return b.visits - a.visits;
+      }
+      return b.valueSum / Math.max(1, b.visits) - a.valueSum / Math.max(1, a.visits);
+    })[0].move;
+}
+
 function minimax(state, depth, alpha, beta, maximizingFor, table = new Map()) {
   const won = winner(state);
   const moves = getLegalMoves(state);
@@ -670,33 +883,5 @@ function rootTacticalAdjustment(state, side) {
 
 export function agentMove(state, difficulty = "medium") {
   const profile = DIFFICULTY_PROFILES[difficulty] || DIFFICULTY_PROFILES.medium;
-  const searchDepth = Math.max(1, profile.depth);
-
-  const legal = getLegalMoves(state);
-  if (legal.length === 0) {
-    throw new Error("No legal move available");
-  }
-
-  const table = new Map();
-  const ranked = [...legal]
-    .sort((a, b) => movePriority(state, b) - movePriority(state, a))
-    .map((move) => {
-      const child = applyMove(state, move);
-      const result = minimax(child, searchDepth - 1, -Infinity, Infinity, state.sideToMove, table);
-      return { score: result.score + rootTacticalAdjustment(child, state.sideToMove), move };
-    });
-
-  ranked.sort((a, b) => b.score - a.score);
-  const bestScore = ranked[0].score;
-  let candidatePool = ranked
-    .slice(0, profile.topK)
-    .filter(({ score }) => score >= bestScore - 20)
-    .map(({ move }) => move);
-  if (candidatePool.length === 0) {
-    candidatePool = [ranked[0].move];
-  }
-  if (profile.randomness > 0 && candidatePool.length > 1 && Math.random() < profile.randomness) {
-    return candidatePool[Math.floor(Math.random() * candidatePool.length)];
-  }
-  return ranked[0].move;
+  return mctsMove(state, profile);
 }

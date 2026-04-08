@@ -401,10 +401,10 @@ function refreshUi() {
   }
 
   const modeLabel = app.playMode === PLAY_MODE_AI ? "Human vs AI" : "Hotseat";
-  const depthLabel = DIFFICULTY_PROFILES[app.difficulty].depth;
+  const thinkLabel = DIFFICULTY_PROFILES[app.difficulty].thinkMs;
   const variantLabel = app.variant === VARIANT_RESPAWN ? "Respawn" : "Standard";
   const rulesMeta = localPreviewMode ? ` | Rules: ${variantLabel}` : "";
-  metaText.textContent = `Mode: ${modeLabel}${rulesMeta} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (depth ${depthLabel}) | Turn: ${sideName(app.state.sideToMove)} | Bottom home: ${app.state.whiteKnightsHome} | Top home: ${app.state.blackKnightsHome}`;
+  metaText.textContent = `Mode: ${modeLabel}${rulesMeta} | Difficulty: ${app.difficulty[0].toUpperCase()}${app.difficulty.slice(1)} (MCTS ${thinkLabel}ms) | Turn: ${sideName(app.state.sideToMove)} | Bottom home: ${app.state.whiteKnightsHome} | Top home: ${app.state.blackKnightsHome}`;
 
   modeButton.textContent = app.playMode === PLAY_MODE_AI ? "Mode: AI" : "Mode: 2P";
   if (variantButton) {
@@ -619,10 +619,10 @@ function renderDifficultyChoices() {
     title: key[0].toUpperCase() + key.slice(1),
     copy:
       key === "easy"
-        ? "More forgiving."
+        ? "Fast Monte Carlo search."
         : key === "medium"
-          ? "Balanced challenge."
-          : "Stronger look-ahead.",
+          ? "Deeper Monte Carlo search."
+          : "Longest Monte Carlo search.",
   }));
   for (const option of options) {
     const button = document.createElement("button");
