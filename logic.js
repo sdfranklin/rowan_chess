@@ -1,3 +1,5 @@
+import { LEARNED_MODEL } from "./magnet_knights_learned_model.js";
+
 export const ROWS = 7;
 export const COLS = 5;
 export const WHITE = "W";
@@ -20,7 +22,32 @@ export const DIFFICULTY_PROFILES = {
 export const AI_ENGINE_PROFILES = {
   brute: { key: "brute", title: "Brute", copy: "Baseline alpha-beta search." },
   race: { key: "race", title: "Race", copy: "Race-aware search and evaluation." },
+  learned: { key: "learned", title: "Learned", copy: "Experimental learned value model over shared features." },
 };
+
+export const LEARNED_FEATURE_SCHEMA_VERSION = "learned_v1";
+export const LEARNED_FEATURE_NAMES = [
+  "bias",
+  "home_diff",
+  "home_live_diff",
+  "unscored_knight_diff",
+  "pawn_diff",
+  "immediate_score_diff",
+  "my_immediate_scores",
+  "opp_immediate_scores",
+  "turns_to_score_self",
+  "turns_to_score_opp",
+  "turns_to_score_diff",
+  "threatened_unscored_knight_diff",
+  "threatened_home_knight_diff",
+  "jump_ready_diff",
+  "bridge_pawn_diff",
+  "legal_move_diff",
+  "unscored_knight_distance_diff",
+  "self_last_unscored_knight",
+  "opp_last_unscored_knight",
+  "variant_is_respawn",
+];
 
 export function sideName(side) {
   return side === WHITE ? "Bottom" : "Top";
@@ -576,6 +603,39 @@ function turnsBonus(turns) {
   return 0;
 }
 
+function cappedTurnsToScore(state, side, maxTurns = 3, fallback = 4, branchLimit = 3) {
+  const probe = cloneState(state);
+  probe.sideToMove = side;
+  if (immediateScoringMoves(probe).length > 0) {
+    return 1;
+  }
+
+  const legal = [...getLegalMoves(probe)]
+    .sort((a, b) => movePriority(probe, b) - movePriority(probe, a))
+    .slice(0, branchLimit);
+  for (const move of legal) {
+    const child = applyMove(probe, move);
+    child.sideToMove = side;
+    if (immediateScoringMoves(child).length > 0) {
+      return 2;
+    }
+    if (maxTurns <= 2) {
+      continue;
+    }
+    const followUps = [...getLegalMoves(child)]
+      .sort((a, b) => movePriority(child, b) - movePriority(child, a))
+      .slice(0, branchLimit);
+    for (const followUp of followUps) {
+      const grandchild = applyMove(child, followUp);
+      grandchild.sideToMove = side;
+      if (immediateScoringMoves(grandchild).length > 0) {
+        return 3;
+      }
+    }
+  }
+  return fallback;
+}
+
 function turnsToScore(state, side, maxTurns = 3, branchLimit = 6, memo = new Map()) {
   const probe = cloneState(state);
   probe.sideToMove = side;
@@ -679,6 +739,137 @@ function evaluateRace(state, side) {
 
   score += 2 * (getLegalMoves(myProbe).length - getLegalMoves(oppProbe).length);
   return score;
+}
+
+function threatenedKnightCounts(state, side) {
+  const enemy = enemyOf(side);
+  let threatenedHome = 0;
+  let threatenedUnscored = 0;
+  for (const coord of threatenedTargets(state, enemy, KNIGHT)) {
+    if (isKnightHome(state, coord)) {
+      threatenedHome += 1;
+    } else {
+      threatenedUnscored += 1;
+    }
+  }
+  return { threatenedHome, threatenedUnscored };
+}
+
+function unscoredKnightDistanceTotal(state, side) {
+  const homeRow = targetRow(side, state.variant);
+  let total = 0;
+  for (const [row, col] of locate(state, side, KNIGHT)) {
+    if (isKnightHome(state, [row, col])) {
+      continue;
+    }
+    if (side === WHITE) {
+      total += Math.max(0, homeRow - row);
+    } else {
+      total += Math.max(0, row - homeRow);
+    }
+  }
+  return total;
+}
+
+export function extractLearnedFeatures(state, side) {
+  const enemy = enemyOf(side);
+  const myHome = side === WHITE ? state.whiteKnightsHome : state.blackKnightsHome;
+  const oppHome = side === WHITE ? state.blackKnightsHome : state.whiteKnightsHome;
+  const myHomeLive = countHomeKnightsOnBoard(state, side);
+  const oppHomeLive = countHomeKnightsOnBoard(state, enemy);
+  const myUnscoredKnights = countUnscoredKnights(state, side);
+  const oppUnscoredKnights = countUnscoredKnights(state, enemy);
+  const myPawns = locate(state, side, PAWN).length;
+  const oppPawns = locate(state, enemy, PAWN).length;
+
+  const myProbe = cloneState(state);
+  myProbe.sideToMove = side;
+  const oppProbe = cloneState(state);
+  oppProbe.sideToMove = enemy;
+  const myImmediateScores = immediateScoringMoves(myProbe).length;
+  const oppImmediateScores = immediateScoringMoves(oppProbe).length;
+  const turnsSelf = cappedTurnsToScore(state, side);
+  const turnsOpp = cappedTurnsToScore(state, enemy);
+  const myThreats = threatenedKnightCounts(state, side);
+  const oppThreats = threatenedKnightCounts(state, enemy);
+  const myLegal = getLegalMoves(myProbe).length;
+  const oppLegal = getLegalMoves(oppProbe).length;
+  const myDistanceTotal = unscoredKnightDistanceTotal(state, side);
+  const oppDistanceTotal = unscoredKnightDistanceTotal(state, enemy);
+
+  return {
+    bias: 1,
+    home_diff: myHome - oppHome,
+    home_live_diff: myHomeLive - oppHomeLive,
+    unscored_knight_diff: myUnscoredKnights - oppUnscoredKnights,
+    pawn_diff: myPawns - oppPawns,
+    immediate_score_diff: myImmediateScores - oppImmediateScores,
+    my_immediate_scores: myImmediateScores,
+    opp_immediate_scores: oppImmediateScores,
+    turns_to_score_self: turnsSelf,
+    turns_to_score_opp: turnsOpp,
+    turns_to_score_diff: turnsOpp - turnsSelf,
+    threatened_unscored_knight_diff: oppThreats.threatenedUnscored - myThreats.threatenedUnscored,
+    threatened_home_knight_diff: oppThreats.threatenedHome - myThreats.threatenedHome,
+    jump_ready_diff: jumpReadyKnights(state, side) - jumpReadyKnights(state, enemy),
+    bridge_pawn_diff: bridgePawns(state, side) - bridgePawns(state, enemy),
+    legal_move_diff: myLegal - oppLegal,
+    unscored_knight_distance_diff: oppDistanceTotal - myDistanceTotal,
+    self_last_unscored_knight: myUnscoredKnights === 1 ? 1 : 0,
+    opp_last_unscored_knight: oppUnscoredKnights === 1 ? 1 : 0,
+    variant_is_respawn: state.variant === VARIANT_RESPAWN ? 1 : 0,
+  };
+}
+
+function validateLearnedModel(model) {
+  if (model.schema_version !== LEARNED_FEATURE_SCHEMA_VERSION) {
+    throw new Error("learned model schema version does not match runtime");
+  }
+  if (JSON.stringify(model.feature_names) !== JSON.stringify(LEARNED_FEATURE_NAMES)) {
+    throw new Error("learned model feature names do not match runtime");
+  }
+  if (model.weights.length !== LEARNED_FEATURE_NAMES.length || model.means.length !== LEARNED_FEATURE_NAMES.length || model.scales.length !== LEARNED_FEATURE_NAMES.length) {
+    throw new Error("learned model vector lengths do not match runtime features");
+  }
+}
+
+function sigmoid(value) {
+  if (value >= 0) {
+    const z = Math.exp(-value);
+    return 1 / (1 + z);
+  }
+  const z = Math.exp(value);
+  return z / (1 + z);
+}
+
+function learnedRawScore(featureMap) {
+  validateLearnedModel(LEARNED_MODEL);
+  let total = LEARNED_MODEL.bias;
+  for (let index = 0; index < LEARNED_FEATURE_NAMES.length; index += 1) {
+    const name = LEARNED_FEATURE_NAMES[index];
+    const scale = Math.abs(LEARNED_MODEL.scales[index]) > 1e-9 ? LEARNED_MODEL.scales[index] : 1;
+    const normalized = (featureMap[name] - LEARNED_MODEL.means[index]) / scale;
+    total += LEARNED_MODEL.weights[index] * normalized;
+  }
+  return total;
+}
+
+export function evaluateLearned(state, side) {
+  const won = winner(state);
+  if (won === side) {
+    return 1e6;
+  }
+  if (won === enemyOf(side)) {
+    return -1e6;
+  }
+
+  const rawScore = learnedRawScore(extractLearnedFeatures(state, side));
+  const probability = sigmoid(rawScore);
+  return 2200 * (probability - 0.5);
+}
+
+function finiteTurnBucket(turns, fallback = 5) {
+  return Number.isFinite(turns) ? turns : fallback;
 }
 
 function boardKey(state) {
@@ -827,6 +1018,10 @@ function minimaxRace(state, depth, alpha, beta, maximizingFor, table = new Map()
   return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateRace, raceMovePriority, "race", table);
 }
 
+function minimaxLearned(state, depth, alpha, beta, maximizingFor, table = new Map()) {
+  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateLearned, movePriority, "learned", table);
+}
+
 function raceRootAdjustment(state, side) {
   const enemy = enemyOf(side);
   const myProbe = cloneState(state);
@@ -841,6 +1036,53 @@ function raceRootAdjustment(state, side) {
   for (const coord of threatenedTargets(state, side, KNIGHT)) {
     score += isKnightHome(state, coord) ? 10 : 140;
   }
+  return score;
+}
+
+function raceMoveAdjustment(state, child, move, side) {
+  const enemy = enemyOf(side);
+  const preMyProbe = cloneState(state);
+  preMyProbe.sideToMove = side;
+  const preOppProbe = cloneState(state);
+  preOppProbe.sideToMove = enemy;
+  const postMyProbe = cloneState(child);
+  postMyProbe.sideToMove = side;
+  const postOppProbe = cloneState(child);
+  postOppProbe.sideToMove = enemy;
+
+  const preMyImmediate = immediateScoringMoves(preMyProbe).length;
+  const preOppImmediate = immediateScoringMoves(preOppProbe).length;
+  const postMyImmediate = immediateScoringMoves(postMyProbe).length;
+  const postOppImmediate = immediateScoringMoves(postOppProbe).length;
+
+  let score = 0;
+  if (preOppImmediate > 0 && postOppImmediate === 0) {
+    score += 1250;
+  }
+  score -= 900 * Math.max(0, postOppImmediate - preOppImmediate);
+  score -= 520 * postOppImmediate;
+
+  if (postMyImmediate > preMyImmediate) {
+    score += 280 * (postMyImmediate - preMyImmediate);
+  }
+  score += 140 * postMyImmediate;
+
+  const preMyTurns = finiteTurnBucket(turnsToScore(state, side, 4), 6);
+  const preOppTurns = finiteTurnBucket(turnsToScore(state, enemy, 4), 6);
+  const postMyTurns = finiteTurnBucket(turnsToScore(child, side, 4), 6);
+  const postOppTurns = finiteTurnBucket(turnsToScore(child, enemy, 4), 6);
+  score += 180 * (preMyTurns - postMyTurns);
+  score += 220 * (postOppTurns - preOppTurns);
+
+  if (!isRespawnMove(move)) {
+    const target = state.board[move.to[0]][move.to[1]];
+    if (target && target.kind === KNIGHT && isKnightHome(state, move.to)) {
+      if (!(preOppImmediate > 0 && postOppImmediate === 0)) {
+        score -= 220;
+      }
+    }
+  }
+
   return score;
 }
 
@@ -880,7 +1122,7 @@ function bruteAgentMove(state, difficulty) {
 
 function raceAgentMove(state, difficulty) {
   const profile = DIFFICULTY_PROFILES[difficulty] || DIFFICULTY_PROFILES.medium;
-  const searchDepth = Math.max(1, profile.depth - 1);
+  const searchDepth = profile.depth;
   const legal = getLegalMoves(state);
   if (legal.length === 0) {
     throw new Error("No legal move available");
@@ -897,7 +1139,7 @@ function raceAgentMove(state, difficulty) {
     .map((move) => {
       const child = applyMove(state, move);
       const result = minimaxRace(child, searchDepth - 1, -Infinity, Infinity, state.sideToMove, table);
-      return { score: result.score + raceRootAdjustment(child, state.sideToMove), move };
+      return { score: result.score + raceRootAdjustment(child, state.sideToMove) + raceMoveAdjustment(state, child, move, state.sideToMove), move };
     });
 
   ranked.sort((a, b) => b.score - a.score);
@@ -915,10 +1157,47 @@ function raceAgentMove(state, difficulty) {
   return ranked[0].move;
 }
 
+function learnedAgentMove(state, difficulty) {
+  const profile = DIFFICULTY_PROFILES[difficulty] || DIFFICULTY_PROFILES.medium;
+  const instant = immediateScoringMoves(state);
+  if (instant.length > 0) {
+    return instant[Math.floor(Math.random() * instant.length)];
+  }
+
+  const legal = getLegalMoves(state);
+  if (legal.length === 0) {
+    throw new Error("No legal move available");
+  }
+
+  const table = new Map();
+  const ranked = legal.map((move) => {
+    const child = applyMove(state, move);
+    const result = minimaxLearned(child, profile.depth - 1, -Infinity, Infinity, state.sideToMove, table);
+    return { score: result.score, move };
+  });
+
+  ranked.sort((a, b) => b.score - a.score);
+  const bestScore = ranked[0].score;
+  let candidatePool = ranked
+    .slice(0, profile.topK)
+    .filter(({ score }) => score >= bestScore - 45)
+    .map(({ move }) => move);
+  if (candidatePool.length === 0) {
+    candidatePool = [ranked[0].move];
+  }
+  if (profile.randomness > 0 && candidatePool.length > 1 && Math.random() < profile.randomness) {
+    return candidatePool[Math.floor(Math.random() * candidatePool.length)];
+  }
+  return ranked[0].move;
+}
+
 export function agentMove(state, difficulty = "medium", engine = "brute") {
   const normalizedEngine = normalizeEngine(engine);
   if (normalizedEngine === "race") {
     return raceAgentMove(state, difficulty);
+  }
+  if (normalizedEngine === "learned") {
+    return learnedAgentMove(state, difficulty);
   }
   return bruteAgentMove(state, difficulty);
 }

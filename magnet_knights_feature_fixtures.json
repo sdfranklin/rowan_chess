@@ -1,0 +1,42 @@
+[
+  {
+    "name": "initial-standard-white",
+    "variant": "standard",
+    "side": "W",
+    "moves": []
+  },
+  {
+    "name": "initial-standard-black",
+    "variant": "standard",
+    "side": "B",
+    "moves": []
+  },
+  {
+    "name": "standard-midgame-white",
+    "variant": "standard",
+    "side": "W",
+    "moves": [
+      "1,3-2,3",
+      "5,3-4,3",
+      "0,4-2,4",
+      "6,4-4,4",
+      "1,4-1,2",
+      "5,4-5,2"
+    ]
+  },
+  {
+    "name": "respawn-midgame-black",
+    "variant": "respawn",
+    "side": "B",
+    "moves": [
+      "1,1-2,1",
+      "5,0-4,0",
+      "1,3-4,3",
+      "5,3-5,2",
+      "4,3-4,2",
+      "5,4-4,4",
+      "1,4-3,4",
+      "5,1-3,1"
+    ]
+  }
+]

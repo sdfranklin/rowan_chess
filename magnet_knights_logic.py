@@ -7,6 +7,8 @@ import math
 import random
 from typing import Callable, Dict, List, Optional, Tuple
 
+from magnet_knights_learned_model import LEARNED_MODEL
+
 ROWS = 7
 COLS = 5
 WHITE = "W"
@@ -16,7 +18,7 @@ KNIGHT = "N"
 VARIANT_STANDARD = "standard"
 VARIANT_RESPAWN = "respawn"
 STANDARD_HOME_ROW_FROM_SIDE = 5
-RESPAWN_HOME_ROW_FROM_SIDE = 6
+RESPAWN_HOME_ROW_FROM_SIDE = 5
 RESPAWN_ROW_FROM_SIDE = 2
 RESPAWN_ORIGIN_ROW = -1
 
@@ -40,10 +42,36 @@ AI_PROFILES: Dict[str, DifficultyProfile] = {
 
 ENGINE_BRUTE = "brute"
 ENGINE_RACE = "race"
+ENGINE_LEARNED = "learned"
 AI_ENGINES: Dict[str, str] = {
     ENGINE_BRUTE: "Brute",
     ENGINE_RACE: "Race",
+    ENGINE_LEARNED: "Learned",
 }
+
+LEARNED_FEATURE_SCHEMA_VERSION = "learned_v1"
+LEARNED_FEATURE_NAMES: Tuple[str, ...] = (
+    "bias",
+    "home_diff",
+    "home_live_diff",
+    "unscored_knight_diff",
+    "pawn_diff",
+    "immediate_score_diff",
+    "my_immediate_scores",
+    "opp_immediate_scores",
+    "turns_to_score_self",
+    "turns_to_score_opp",
+    "turns_to_score_diff",
+    "threatened_unscored_knight_diff",
+    "threatened_home_knight_diff",
+    "jump_ready_diff",
+    "bridge_pawn_diff",
+    "legal_move_diff",
+    "unscored_knight_distance_diff",
+    "self_last_unscored_knight",
+    "opp_last_unscored_knight",
+    "variant_is_respawn",
+)
 
 
 def in_bounds(row: int, col: int) -> bool:
@@ -508,6 +536,29 @@ def turns_bonus(turns: float) -> int:
     return 0
 
 
+def capped_turns_to_score(state: State, side: str, max_turns: int = 3, fallback: int = 4, branch_limit: int = 3) -> int:
+    probe = state.clone()
+    probe.side_to_move = side
+    if immediate_scoring_moves(probe):
+        return 1
+
+    legal = sorted(get_legal_moves(probe), key=lambda move: _move_priority(probe, move), reverse=True)[:branch_limit]
+    for move in legal:
+        child = apply_move(probe, move)
+        child.side_to_move = side
+        if immediate_scoring_moves(child):
+            return 2
+        if max_turns <= 2:
+            continue
+        follow_ups = sorted(get_legal_moves(child), key=lambda candidate: _move_priority(child, candidate), reverse=True)[:branch_limit]
+        for follow_up in follow_ups:
+            grandchild = apply_move(child, follow_up)
+            grandchild.side_to_move = side
+            if immediate_scoring_moves(grandchild):
+                return 3
+    return fallback
+
+
 def turns_to_score(
     state: State,
     side: str,
@@ -603,6 +654,134 @@ def evaluate_race(state: State, side: str) -> float:
 
     score += 2 * (len(get_legal_moves(my_probe)) - len(get_legal_moves(opp_probe)))
     return float(score)
+
+
+def _threatened_knight_counts(state: State, side: str) -> Tuple[int, int]:
+    enemy = state.enemy(side)
+    threatened_home = 0
+    threatened_unscored = 0
+    for coord in threatened_targets(state, enemy, KNIGHT):
+        if is_knight_home(state, coord):
+            threatened_home += 1
+        else:
+            threatened_unscored += 1
+    return threatened_home, threatened_unscored
+
+
+def _unscored_knight_distance_total(state: State, side: str) -> int:
+    home_row = state.target_row(side)
+    total = 0
+    for row, col in state.locate(side, KNIGHT):
+        if is_knight_home(state, (row, col)):
+            continue
+        if side == WHITE:
+            total += max(0, home_row - row)
+        else:
+            total += max(0, row - home_row)
+    return total
+
+
+def extract_learned_features(state: State, side: str) -> Dict[str, float]:
+    enemy = state.enemy(side)
+    my_home = state.white_knights_home if side == WHITE else state.black_knights_home
+    opp_home = state.black_knights_home if side == WHITE else state.white_knights_home
+    my_home_live = count_home_knights_on_board(state, side)
+    opp_home_live = count_home_knights_on_board(state, enemy)
+    my_unscored_knights = count_unscored_knights(state, side)
+    opp_unscored_knights = count_unscored_knights(state, enemy)
+    my_pawns = len(state.locate(side, PAWN))
+    opp_pawns = len(state.locate(enemy, PAWN))
+
+    my_probe = state.clone()
+    my_probe.side_to_move = side
+    opp_probe = state.clone()
+    opp_probe.side_to_move = enemy
+    my_immediate_scores = len(immediate_scoring_moves(my_probe))
+    opp_immediate_scores = len(immediate_scoring_moves(opp_probe))
+    turns_self = capped_turns_to_score(state, side)
+    turns_opp = capped_turns_to_score(state, enemy)
+    my_home_threatened, my_unscored_threatened = _threatened_knight_counts(state, side)
+    opp_home_threatened, opp_unscored_threatened = _threatened_knight_counts(state, enemy)
+    my_legal = len(get_legal_moves(my_probe))
+    opp_legal = len(get_legal_moves(opp_probe))
+    my_distance_total = _unscored_knight_distance_total(state, side)
+    opp_distance_total = _unscored_knight_distance_total(state, enemy)
+
+    return {
+        "bias": 1.0,
+        "home_diff": float(my_home - opp_home),
+        "home_live_diff": float(my_home_live - opp_home_live),
+        "unscored_knight_diff": float(my_unscored_knights - opp_unscored_knights),
+        "pawn_diff": float(my_pawns - opp_pawns),
+        "immediate_score_diff": float(my_immediate_scores - opp_immediate_scores),
+        "my_immediate_scores": float(my_immediate_scores),
+        "opp_immediate_scores": float(opp_immediate_scores),
+        "turns_to_score_self": float(turns_self),
+        "turns_to_score_opp": float(turns_opp),
+        "turns_to_score_diff": float(turns_opp - turns_self),
+        "threatened_unscored_knight_diff": float(opp_unscored_threatened - my_unscored_threatened),
+        "threatened_home_knight_diff": float(opp_home_threatened - my_home_threatened),
+        "jump_ready_diff": float(jump_ready_knights(state, side) - jump_ready_knights(state, enemy)),
+        "bridge_pawn_diff": float(bridge_pawns(state, side) - bridge_pawns(state, enemy)),
+        "legal_move_diff": float(my_legal - opp_legal),
+        "unscored_knight_distance_diff": float(opp_distance_total - my_distance_total),
+        "self_last_unscored_knight": 1.0 if my_unscored_knights == 1 else 0.0,
+        "opp_last_unscored_knight": 1.0 if opp_unscored_knights == 1 else 0.0,
+        "variant_is_respawn": 1.0 if state.variant == VARIANT_RESPAWN else 0.0,
+    }
+
+
+def _validate_learned_model(model: Dict[str, object]) -> None:
+    if str(model.get("schema_version")) != LEARNED_FEATURE_SCHEMA_VERSION:
+        raise ValueError("learned model schema version does not match runtime")
+    feature_names = tuple(str(name) for name in model.get("feature_names", []))
+    if feature_names != LEARNED_FEATURE_NAMES:
+        raise ValueError("learned model feature names do not match runtime")
+    weights = model.get("weights", [])
+    means = model.get("means", [])
+    scales = model.get("scales", [])
+    if len(weights) != len(LEARNED_FEATURE_NAMES) or len(means) != len(LEARNED_FEATURE_NAMES) or len(scales) != len(LEARNED_FEATURE_NAMES):
+        raise ValueError("learned model vector lengths do not match runtime features")
+
+
+def _sigmoid(value: float) -> float:
+    if value >= 0:
+        z = math.exp(-value)
+        return 1.0 / (1.0 + z)
+    z = math.exp(value)
+    return z / (1.0 + z)
+
+
+def _learned_raw_score(feature_map: Dict[str, float]) -> float:
+    _validate_learned_model(LEARNED_MODEL)
+    weights = [float(value) for value in LEARNED_MODEL["weights"]]
+    means = [float(value) for value in LEARNED_MODEL["means"]]
+    scales = [float(value) for value in LEARNED_MODEL["scales"]]
+    bias = float(LEARNED_MODEL["bias"])
+    total = bias
+    for index, name in enumerate(LEARNED_FEATURE_NAMES):
+        scale = scales[index] if abs(scales[index]) > 1e-9 else 1.0
+        normalized = (float(feature_map[name]) - means[index]) / scale
+        total += weights[index] * normalized
+    return total
+
+
+def evaluate_learned(state: State, side: str) -> float:
+    winner = state.winner()
+    if winner == side:
+        return 1e6
+    if winner == state.enemy(side):
+        return -1e6
+
+    raw_score = _learned_raw_score(extract_learned_features(state, side))
+    probability = _sigmoid(raw_score)
+    return 2200.0 * (probability - 0.5)
+
+
+def _finite_turn_bucket(turns: float, fallback: int = 5) -> int:
+    if math.isinf(turns):
+        return fallback
+    return int(turns)
 
 
 def _minimax_with_policy(
@@ -706,6 +885,17 @@ def minimax_race(
     return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_race, _race_move_priority, ENGINE_RACE, table)
 
 
+def minimax_learned(
+    state: State,
+    depth: int,
+    alpha: float,
+    beta: float,
+    maximizing_for: str,
+    table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
+) -> Tuple[float, Optional[Move]]:
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_learned, _move_priority, ENGINE_LEARNED, table)
+
+
 def _move_priority(state: State, move: Move) -> int:
     if is_respawn_move(move):
         return 35
@@ -790,6 +980,49 @@ def _race_root_adjustment(state: State, side: str) -> float:
     return score
 
 
+def _race_move_adjustment(state: State, child: State, move: Move, side: str) -> float:
+    enemy = state.enemy(side)
+
+    pre_my_probe = state.clone()
+    pre_my_probe.side_to_move = side
+    pre_opp_probe = state.clone()
+    pre_opp_probe.side_to_move = enemy
+    post_my_probe = child.clone()
+    post_my_probe.side_to_move = side
+    post_opp_probe = child.clone()
+    post_opp_probe.side_to_move = enemy
+
+    pre_my_immediate = len(immediate_scoring_moves(pre_my_probe))
+    pre_opp_immediate = len(immediate_scoring_moves(pre_opp_probe))
+    post_my_immediate = len(immediate_scoring_moves(post_my_probe))
+    post_opp_immediate = len(immediate_scoring_moves(post_opp_probe))
+
+    score = 0.0
+    if pre_opp_immediate > 0 and post_opp_immediate == 0:
+        score += 1250.0
+    score -= 900.0 * max(0, post_opp_immediate - pre_opp_immediate)
+    score -= 520.0 * post_opp_immediate
+
+    if post_my_immediate > pre_my_immediate:
+        score += 280.0 * (post_my_immediate - pre_my_immediate)
+    score += 140.0 * post_my_immediate
+
+    pre_my_turns = _finite_turn_bucket(turns_to_score(state, side, max_turns=4), fallback=6)
+    pre_opp_turns = _finite_turn_bucket(turns_to_score(state, enemy, max_turns=4), fallback=6)
+    post_my_turns = _finite_turn_bucket(turns_to_score(child, side, max_turns=4), fallback=6)
+    post_opp_turns = _finite_turn_bucket(turns_to_score(child, enemy, max_turns=4), fallback=6)
+    score += 180.0 * (pre_my_turns - post_my_turns)
+    score += 220.0 * (post_opp_turns - pre_opp_turns)
+
+    if not is_respawn_move(move):
+        _start, destination = move
+        target = state.board[destination[0]][destination[1]]
+        if target is not None and target.kind == KNIGHT and is_knight_home(state, destination):
+            if not (pre_opp_immediate > 0 and post_opp_immediate == 0):
+                score -= 220.0
+    return score
+
+
 def _brute_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
     profile = AI_PROFILES[difficulty]
     search_depth = depth if depth is not None else profile.depth
@@ -822,7 +1055,7 @@ def _brute_agent_move(state: State, depth: Optional[int], difficulty: str) -> Mo
 
 def _race_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
     profile = AI_PROFILES[difficulty]
-    search_depth = max(1, (depth if depth is not None else profile.depth) - 1)
+    search_depth = depth if depth is not None else profile.depth
 
     legal = get_legal_moves(state)
     if not legal:
@@ -838,6 +1071,7 @@ def _race_agent_move(state: State, depth: Optional[int], difficulty: str) -> Mov
         child = apply_move(state, move)
         score, _unused = minimax_race(child, search_depth - 1, -math.inf, math.inf, state.side_to_move, table)
         score += _race_root_adjustment(child, state.side_to_move)
+        score += _race_move_adjustment(state, child, move, state.side_to_move)
         ranked.append((score, move))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
@@ -851,11 +1085,43 @@ def _race_agent_move(state: State, depth: Optional[int], difficulty: str) -> Mov
     return ranked[0][1]
 
 
+def _learned_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
+    profile = AI_PROFILES[difficulty]
+    search_depth = depth if depth is not None else profile.depth
+
+    winners = immediate_scoring_moves(state)
+    if winners:
+        return random.choice(winners)
+
+    legal = get_legal_moves(state)
+    if not legal:
+        raise ValueError("No legal move available")
+
+    table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float] = {}
+    ranked: List[Tuple[float, Move]] = []
+    for move in legal:
+        child = apply_move(state, move)
+        score, _unused = minimax_learned(child, search_depth - 1, -math.inf, math.inf, state.side_to_move, table)
+        ranked.append((score, move))
+
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    best_score = ranked[0][0]
+    candidate_pool = [move for score, move in ranked[: profile.top_k] if score >= best_score - 45]
+    if not candidate_pool:
+        candidate_pool = [ranked[0][1]]
+
+    if profile.randomness > 0.0 and len(candidate_pool) > 1 and random.random() < profile.randomness:
+        return random.choice(candidate_pool)
+    return ranked[0][1]
+
+
 def agent_move(state: State, depth: Optional[int] = None, difficulty: str = "medium", engine: str = ENGINE_BRUTE) -> Move:
     difficulty = normalize_difficulty(difficulty)
     engine = normalize_engine(engine)
     if engine == ENGINE_RACE:
         return _race_agent_move(state, depth, difficulty)
+    if engine == ENGINE_LEARNED:
+        return _learned_agent_move(state, depth, difficulty)
     return _brute_agent_move(state, depth, difficulty)
 
 
