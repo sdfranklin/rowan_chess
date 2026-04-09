@@ -36,8 +36,8 @@ class DifficultyProfile:
 
 AI_PROFILES: Dict[str, DifficultyProfile] = {
     "easy": DifficultyProfile(name="easy", depth=2, randomness=0.35, top_k=3),
-    "medium": DifficultyProfile(name="medium", depth=4, randomness=0.12, top_k=2),
-    "hard": DifficultyProfile(name="hard", depth=5, randomness=0.0, top_k=1),
+    "medium": DifficultyProfile(name="medium", depth=3, randomness=0.12, top_k=2),
+    "hard": DifficultyProfile(name="hard", depth=4, randomness=0.0, top_k=1),
 }
 
 ENGINE_BRUTE = "brute"
@@ -784,6 +784,23 @@ def _finite_turn_bucket(turns: float, fallback: int = 5) -> int:
     return int(turns)
 
 
+def _side_immediate_scores(state: State, side: str) -> int:
+    probe = state.clone()
+    probe.side_to_move = side
+    return len(immediate_scoring_moves(probe))
+
+
+def _has_tactical_race_state(state: State) -> bool:
+    if _side_immediate_scores(state, WHITE) > 0 or _side_immediate_scores(state, BLACK) > 0:
+        return True
+    for side in (WHITE, BLACK):
+        enemy = state.enemy(side)
+        for coord in threatened_targets(state, enemy, KNIGHT):
+            if not is_knight_home(state, coord):
+                return True
+    return False
+
+
 def _minimax_with_policy(
     state: State,
     depth: int,
@@ -793,6 +810,7 @@ def _minimax_with_policy(
     evaluate_fn: Callable[[State, str], float],
     priority_fn: Callable[[State, Move], int],
     cache_prefix: str,
+    tactical_extensions: int = 0,
     table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
     if table is None:
@@ -800,6 +818,9 @@ def _minimax_with_policy(
 
     winner = state.winner()
     moves = get_legal_moves(state)
+    if depth == 0 and winner is None and moves and tactical_extensions > 0 and _has_tactical_race_state(state):
+        depth = 1
+        tactical_extensions -= 1
     if depth == 0 or winner is not None or not moves:
         return evaluate_fn(state, maximizing_for), None
 
@@ -828,6 +849,7 @@ def _minimax_with_policy(
                 evaluate_fn,
                 priority_fn,
                 cache_prefix,
+                tactical_extensions,
                 table,
             )
             if child_value > value:
@@ -851,6 +873,7 @@ def _minimax_with_policy(
             evaluate_fn,
             priority_fn,
             cache_prefix,
+            tactical_extensions,
             table,
         )
         if child_value < value:
@@ -869,9 +892,10 @@ def minimax(
     alpha: float,
     beta: float,
     maximizing_for: str,
+    tactical_extensions: int = 0,
     table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
-    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate, _move_priority, ENGINE_BRUTE, table)
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate, _move_priority, ENGINE_BRUTE, tactical_extensions, table)
 
 
 def minimax_race(
@@ -882,7 +906,7 @@ def minimax_race(
     maximizing_for: str,
     table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
-    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_race, _race_move_priority, ENGINE_RACE, table)
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_race, _race_move_priority, ENGINE_RACE, 0, table)
 
 
 def minimax_learned(
@@ -893,7 +917,7 @@ def minimax_learned(
     maximizing_for: str,
     table: Optional[Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float]] = None,
 ) -> Tuple[float, Optional[Move]]:
-    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_learned, _move_priority, ENGINE_LEARNED, table)
+    return _minimax_with_policy(state, depth, alpha, beta, maximizing_for, evaluate_learned, _move_priority, ENGINE_LEARNED, 0, table)
 
 
 def _move_priority(state: State, move: Move) -> int:
@@ -1023,13 +1047,38 @@ def _race_move_adjustment(state: State, child: State, move: Move, side: str) -> 
     return score
 
 
+def _brute_move_adjustment(state: State, child: State, move: Move, side: str) -> float:
+    enemy = state.enemy(side)
+    pre_my_immediate = _side_immediate_scores(state, side)
+    pre_opp_immediate = _side_immediate_scores(state, enemy)
+    post_my_immediate = _side_immediate_scores(child, side)
+    post_opp_immediate = _side_immediate_scores(child, enemy)
+
+    score = 0.0
+    if pre_opp_immediate > 0 and post_opp_immediate == 0:
+        score += 900.0
+    if post_opp_immediate > pre_opp_immediate:
+        score -= 1250.0 * (post_opp_immediate - pre_opp_immediate)
+    score -= 420.0 * post_opp_immediate
+    score += 180.0 * post_my_immediate
+
+    if not is_respawn_move(move):
+        _start, destination = move
+        piece = state.board[move[0][0]][move[0][1]]
+        target = state.board[destination[0]][destination[1]]
+        if piece is not None and piece.kind == KNIGHT:
+            threatened = any(coord == destination for coord in threatened_targets(child, enemy, KNIGHT))
+            if threatened:
+                score -= 40.0 if is_knight_home(child, destination) else 260.0
+        if target is not None and target.kind == KNIGHT and is_knight_home(state, destination):
+            if post_my_immediate == 0 and post_opp_immediate > 0:
+                score -= 180.0
+    return score
+
+
 def _brute_agent_move(state: State, depth: Optional[int], difficulty: str) -> Move:
     profile = AI_PROFILES[difficulty]
     search_depth = depth if depth is not None else profile.depth
-
-    winners = immediate_scoring_moves(state)
-    if winners:
-        return random.choice(winners)
 
     legal = get_legal_moves(state)
     if not legal:
@@ -1037,9 +1086,11 @@ def _brute_agent_move(state: State, depth: Optional[int], difficulty: str) -> Mo
 
     table: Dict[Tuple[Tuple[str, ...], str, int, int, int, str, str], float] = {}
     ranked: List[Tuple[float, Move]] = []
-    for move in legal:
+    tactical_extensions = 1 if search_depth >= 4 else 0
+    for move in sorted(legal, key=lambda candidate: _move_priority(state, candidate), reverse=True):
         child = apply_move(state, move)
-        score, _unused = minimax(child, search_depth - 1, -math.inf, math.inf, state.side_to_move, table)
+        score, _unused = minimax(child, search_depth - 1, -math.inf, math.inf, state.side_to_move, tactical_extensions, table)
+        score += _brute_move_adjustment(state, child, move, state.side_to_move)
         ranked.append((score, move))
 
     ranked.sort(key=lambda item: item[0], reverse=True)

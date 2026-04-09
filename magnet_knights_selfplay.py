@@ -67,7 +67,7 @@ def search_score_to_target(score: float, scale: float = 650.0) -> float:
 def brute_search_target(child_state, mover: str, difficulty: str) -> tuple[float, float]:
     profile = AI_PROFILES[difficulty]
     search_depth = max(1, min(3, profile.depth - 1))
-    score, _best_move = minimax(child_state, search_depth, -math.inf, math.inf, mover, {})
+    score, _best_move = minimax(child_state, search_depth, -math.inf, math.inf, mover, 0, {})
     return score, search_score_to_target(score)
 
 

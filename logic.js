@@ -872,6 +872,27 @@ function finiteTurnBucket(turns, fallback = 5) {
   return Number.isFinite(turns) ? turns : fallback;
 }
 
+function sideImmediateScores(state, side) {
+  const probe = cloneState(state);
+  probe.sideToMove = side;
+  return immediateScoringMoves(probe).length;
+}
+
+function hasTacticalRaceState(state) {
+  if (sideImmediateScores(state, WHITE) > 0 || sideImmediateScores(state, BLACK) > 0) {
+    return true;
+  }
+  for (const side of [WHITE, BLACK]) {
+    const enemy = enemyOf(side);
+    for (const coord of threatenedTargets(state, enemy, KNIGHT)) {
+      if (!isKnightHome(state, coord)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function boardKey(state) {
   const flat = [];
   for (let row = 0; row < ROWS; row += 1) {
@@ -939,9 +960,13 @@ function raceMovePriority(state, move) {
   return priority;
 }
 
-function minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateFn, priorityFn, cachePrefix, table = new Map()) {
+function minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateFn, priorityFn, cachePrefix, tacticalExtensions = 0, table = new Map()) {
   const won = winner(state);
   const moves = getLegalMoves(state);
+  if (depth === 0 && won === null && moves.length > 0 && tacticalExtensions > 0 && hasTacticalRaceState(state)) {
+    depth = 1;
+    tacticalExtensions -= 1;
+  }
   if (depth === 0 || won !== null || moves.length === 0) {
     return { score: evaluateFn(state, maximizingFor), move: null };
   }
@@ -968,6 +993,7 @@ function minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateFn,
         evaluateFn,
         priorityFn,
         cachePrefix,
+        tacticalExtensions,
         table,
       ).score;
       if (childScore > value) {
@@ -995,6 +1021,7 @@ function minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateFn,
       evaluateFn,
       priorityFn,
       cachePrefix,
+      tacticalExtensions,
       table,
     ).score;
     if (childScore < value) {
@@ -1010,16 +1037,16 @@ function minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateFn,
   return { score: value, move: bestMove };
 }
 
-function minimax(state, depth, alpha, beta, maximizingFor, table = new Map()) {
-  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluate, movePriority, "brute", table);
+function minimax(state, depth, alpha, beta, maximizingFor, tacticalExtensions = 0, table = new Map()) {
+  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluate, movePriority, "brute", tacticalExtensions, table);
 }
 
 function minimaxRace(state, depth, alpha, beta, maximizingFor, table = new Map()) {
-  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateRace, raceMovePriority, "race", table);
+  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateRace, raceMovePriority, "race", 0, table);
 }
 
 function minimaxLearned(state, depth, alpha, beta, maximizingFor, table = new Map()) {
-  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateLearned, movePriority, "learned", table);
+  return minimaxWithPolicy(state, depth, alpha, beta, maximizingFor, evaluateLearned, movePriority, "learned", 0, table);
 }
 
 function raceRootAdjustment(state, side) {
@@ -1086,23 +1113,56 @@ function raceMoveAdjustment(state, child, move, side) {
   return score;
 }
 
-function bruteAgentMove(state, difficulty) {
-  const profile = DIFFICULTY_PROFILES[difficulty] || DIFFICULTY_PROFILES.medium;
-  const instant = immediateScoringMoves(state);
-  if (instant.length > 0) {
-    return instant[Math.floor(Math.random() * instant.length)];
+function bruteMoveAdjustment(state, child, move, side) {
+  const enemy = enemyOf(side);
+  const preMyImmediate = sideImmediateScores(state, side);
+  const preOppImmediate = sideImmediateScores(state, enemy);
+  const postMyImmediate = sideImmediateScores(child, side);
+  const postOppImmediate = sideImmediateScores(child, enemy);
+
+  let score = 0;
+  if (preOppImmediate > 0 && postOppImmediate === 0) {
+    score += 900;
+  }
+  if (postOppImmediate > preOppImmediate) {
+    score -= 1250 * (postOppImmediate - preOppImmediate);
+  }
+  score -= 420 * postOppImmediate;
+  score += 180 * postMyImmediate;
+
+  if (!isRespawnMove(move)) {
+    const destination = move.to;
+    const piece = state.board[move.from[0]][move.from[1]];
+    const target = state.board[destination[0]][destination[1]];
+    if (piece && piece.kind === KNIGHT) {
+      const threatened = threatenedTargets(child, enemy, KNIGHT).some(([row, col]) => row === destination[0] && col === destination[1]);
+      if (threatened) {
+        score -= isKnightHome(child, destination) ? 40 : 260;
+      }
+    }
+    if (target && target.kind === KNIGHT && isKnightHome(state, destination)) {
+      if (postMyImmediate === 0 && postOppImmediate > 0) {
+        score -= 180;
+      }
+    }
   }
 
+  return score;
+}
+
+function bruteAgentMove(state, difficulty) {
+  const profile = DIFFICULTY_PROFILES[difficulty] || DIFFICULTY_PROFILES.medium;
   const legal = getLegalMoves(state);
   if (legal.length === 0) {
     throw new Error("No legal move available");
   }
 
   const table = new Map();
-  const ranked = legal.map((move) => {
+  const tacticalExtensions = profile.depth >= 4 ? 1 : 0;
+  const ranked = [...legal].sort((a, b) => movePriority(state, b) - movePriority(state, a)).map((move) => {
     const child = applyMove(state, move);
-    const result = minimax(child, profile.depth - 1, -Infinity, Infinity, state.sideToMove, table);
-    return { score: result.score, move };
+    const result = minimax(child, profile.depth - 1, -Infinity, Infinity, state.sideToMove, tacticalExtensions, table);
+    return { score: result.score + bruteMoveAdjustment(state, child, move, state.sideToMove), move };
   });
 
   ranked.sort((a, b) => b.score - a.score);
